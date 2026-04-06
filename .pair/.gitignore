@@ -1,0 +1,5 @@
+# SQLite database (local cache, rebuilt from JSONL)
+*.db
+*.db-wal
+*.db-shm
+*.db-journal

@@ -1,0 +1,4 @@
+{"id":1,"ts":"2026-04-06 09:39:09","action":"issue_created","ref":"pair-fbgq","summary":"Not Agnostic, looking for Logs inside Apple Library on Ubuntu 24.04"}
+{"id":2,"ts":"2026-04-06 10:11:24","action":"auto_commit","summary":"commit: chore: release 1.24.3 — cross-platform log path and PATH resolution (#15)","tags":"auto-commit","session":"5b51e458-b0b2-45e4-9658-76f451a13028"}
+{"id":3,"ts":"2026-04-06 10:12:40","action":"comment_added","ref":"pair-fbgq","summary":"GitHub issue #15 response (draft):\n\nHi @ubuntupunk — thanks for reporting thi..."}
+{"id":4,"ts":"2026-04-06 10:13:24","action":"comment_added","ref":"pair-fbgq","summary":"## Commits\n\na24eddf chore: release 1.24.3 — cross-platform log path and PATH ..."}
