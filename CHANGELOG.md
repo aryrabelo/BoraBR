@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.24.3] - 2026-04-06
+
+> Requires **bd 0.49.x**. Recommended CLI: **br 0.1.14**.
+
+### Fixes
+- **Cross-platform log path** (#15): `get_log_path()` was hardcoded to macOS `~/Library/Logs/`. Now uses platform-aware paths — Linux resolves to `~/.local/share/com.beads.manager/logs/beads.log` (XDG), Windows to `%APPDATA%/com.beads.manager/logs/beads.log`
+- **Cross-platform PATH resolution** (#15): `get_extended_path()` used Unix-only `HOME` variable and `:` separator. Now uses `USERPROFILE`/`LOCALAPPDATA` and `;` separator on Windows, with appropriate search paths per platform
+
 ## [1.24.2] - 2026-03-03
 
 > Requires **bd 0.49.x**. Recommended CLI: **br 0.1.14**.
