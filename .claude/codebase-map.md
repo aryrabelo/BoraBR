@@ -1,7 +1,7 @@
 # Codebase Map - Beads Task-Issue Tracker
 
 > Auto-generated comprehensive map of the codebase for faster AI reasoning.
-> Last updated: 2026-02-26 | App version: 1.24.0
+> Last updated: 2026-02-26 | App version: 1.24.2
 
 ## Architecture Overview
 
@@ -66,12 +66,12 @@
 | File | Exports | Purpose |
 |------|---------|---------|
 | `useColumnConfig.ts` | `useColumnConfig()` | Issue table column visibility (per-project) |
-| `useNotification.ts` | `useNotification()` | Toast notifications — auto-dismiss after 3s |
+| `useNotification.ts` | `useNotification()` | Toast notifications — auto-dismiss after 5s, theme-aware light/dark styles |
 | `useTheme.ts` | `useTheme()` | Dark/light mode toggle |
 | `useCollapsible.ts` | `useCollapsible()` | Panel collapse state (dashboard, project sections) |
 | `useZoom.ts` | `useZoom()` | Content zoom 75-150% |
 | `useAppMenu.ts` | `useAppMenu()` | Tauri native menu bar setup |
-| `useTauriWindow.ts` | `useTauriWindow()` | Window drag for custom title bar |
+| `useTauriWindow.ts` | `useTauriWindow()` | Window drag for custom title bar + dynamic window title (project name) |
 | `usePinnedIssues.ts` | `usePinnedIssues()` | Pinned issue list with sort modes (`added`, `updated`, `manual`) |
 | `useKeyboardNavigation.ts` | `useKeyboardNavigation()` | Arrow key navigation for issue list with scroll-to-focused |
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.4] - 2026-04-08
+
+> Requires **bd 0.49.x**. Recommended CLI: **br** up to 0.1.33.
+
+### Fixes
+- **br list not displaying issues since br 0.1.30** (#18): `br list --json` now returns a paginated JSON envelope (`{ items: [...], total, page, per_page }`) instead of a flat array. Added envelope detection in both the Rust backend and Nuxt API layer to unwrap the new format while remaining backward-compatible with older br versions
+
 ## [1.24.3] - 2026-04-06
 
 > Requires **bd 0.49.x**. Recommended CLI: **br 0.1.14**.
