@@ -28,6 +28,17 @@ export interface CmuxSendPromptResponse {
   stdout: string
 }
 
+export interface ProjectWorktree {
+  rootPath: string
+  worktreePath: string
+  canonicalPath: string
+  branch?: string | null
+  head?: string | null
+  repoRemote?: string | null
+  isRoot: boolean
+  inclusionReason: 'git-worktree-list' | 'worktrees-directory-scan' | string
+}
+
 // Type declarations for Tauri detection
 declare global {
   interface Window {
@@ -99,6 +110,14 @@ export async function cmuxSendPrompt(surface: string, prompt: string): Promise<C
     return invoke<CmuxSendPromptResponse>('cmux_send_prompt', { request: { surface, prompt } })
   }
   throw new Error('cmux prompt is only available in the desktop app')
+}
+
+export async function discoverProjectWorktrees(projectPath: string): Promise<ProjectWorktree[]> {
+  if (isTauri()) {
+    return invoke<ProjectWorktree[]>('discover_project_worktrees', { projectPath })
+  }
+
+  return []
 }
 
 async function postExternalData(url: string, body: string): Promise<string> {

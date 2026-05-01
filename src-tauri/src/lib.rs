@@ -1,7 +1,7 @@
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -348,6 +348,44 @@ pub struct FsListResult {
     #[serde(rename = "usesDolt")]
     pub uses_dolt: bool,
     pub entries: Vec<DirectoryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ProjectWorktree {
+    #[serde(rename = "rootPath")]
+    pub root_path: String,
+    #[serde(rename = "worktreePath")]
+    pub worktree_path: String,
+    #[serde(rename = "canonicalPath")]
+    pub canonical_path: String,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    #[serde(rename = "repoRemote")]
+    pub repo_remote: Option<String>,
+    #[serde(rename = "isRoot")]
+    pub is_root: bool,
+    #[serde(rename = "inclusionReason")]
+    pub inclusion_reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ParsedGitWorktree {
+    path: String,
+    branch: Option<String>,
+    head: Option<String>,
+    prunable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ProjectWorktreeCandidate {
+    root_path: String,
+    worktree_path: String,
+    canonical_path: String,
+    branch: Option<String>,
+    head: Option<String>,
+    repo_remote: Option<String>,
+    is_root: bool,
+    inclusion_reason: String,
 }
 
 // ============================================================================
@@ -3623,6 +3661,290 @@ async fn bd_available_relation_types() -> Vec<serde_json::Value> {
     types.into_iter().map(|(v, l)| serde_json::json!({ "value": v, "label": l })).collect()
 }
 
+fn expand_user_path(path: &str) -> PathBuf {
+    if path == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from(path));
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+fn run_git(cwd: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let output = new_command("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to execute git: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("git {} failed with status {}", args.join(" "), output.status)
+        } else {
+            stderr
+        });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn parse_git_worktree_branch(raw: &str) -> Option<String> {
+    let branch = raw.strip_prefix("refs/heads/").unwrap_or(raw).trim();
+    if branch.is_empty() { None } else { Some(branch.to_string()) }
+}
+
+fn parse_git_worktree_porcelain(output: &str) -> Vec<ParsedGitWorktree> {
+    let mut worktrees = Vec::new();
+    let mut current: Option<ParsedGitWorktree> = None;
+
+    for line in output.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            if let Some(worktree) = current.take() {
+                worktrees.push(worktree);
+            }
+            continue;
+        }
+
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(worktree) = current.take() {
+                worktrees.push(worktree);
+            }
+            current = Some(ParsedGitWorktree {
+                path: path.to_string(),
+                branch: None,
+                head: None,
+                prunable: false,
+            });
+            continue;
+        }
+
+        let Some(worktree) = current.as_mut() else { continue; };
+        if let Some(head) = line.strip_prefix("HEAD ") {
+            worktree.head = Some(head.to_string());
+        } else if let Some(branch) = line.strip_prefix("branch ") {
+            worktree.branch = parse_git_worktree_branch(branch);
+        } else if line == "prunable" || line.starts_with("prunable ") {
+            worktree.prunable = true;
+        }
+    }
+
+    if let Some(worktree) = current.take() {
+        worktrees.push(worktree);
+    }
+    worktrees
+}
+
+fn normalize_git_remote_url(remote: &str) -> String {
+    let mut value = remote.trim().trim_end_matches('/').to_string();
+    if let Some(stripped) = value.strip_suffix(".git") {
+        value = stripped.to_string();
+    }
+
+    if let Some(rest) = value.strip_prefix("git@github.com:") {
+        return format!("github.com/{}", rest).to_lowercase();
+    }
+    if let Some(rest) = value.strip_prefix("ssh://git@github.com/") {
+        return format!("github.com/{}", rest).to_lowercase();
+    }
+    if let Some(rest) = value.strip_prefix("https://github.com/") {
+        return format!("github.com/{}", rest).to_lowercase();
+    }
+    if let Some(rest) = value.strip_prefix("http://github.com/") {
+        return format!("github.com/{}", rest).to_lowercase();
+    }
+    value.to_lowercase()
+}
+
+fn github_owner_repo_from_remote(remote: &str) -> Option<(String, String)> {
+    let normalized = normalize_git_remote_url(remote);
+    let rest = normalized.strip_prefix("github.com/")?;
+    let mut parts = rest.split('/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim();
+    if owner.is_empty() || repo.is_empty() {
+        None
+    } else {
+        Some((owner.to_string(), repo.to_string()))
+    }
+}
+
+fn git_remote_url(cwd: &std::path::Path) -> Option<String> {
+    run_git(cwd, &["config", "--get", "remote.origin.url"])
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn git_short_branch(cwd: &std::path::Path) -> Option<String> {
+    run_git(cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn git_head(cwd: &std::path::Path) -> Option<String> {
+    run_git(cwd, &["rev-parse", "HEAD"])
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn candidate_from_path(
+    root_path: &str,
+    path: &std::path::Path,
+    branch: Option<String>,
+    head: Option<String>,
+    repo_remote: Option<String>,
+    inclusion_reason: &str,
+) -> Option<ProjectWorktreeCandidate> {
+    let canonical_path = path.canonicalize().ok()?;
+    if !canonical_path.exists() {
+        return None;
+    }
+    let canonical_string = canonical_path.to_string_lossy().to_string();
+
+    Some(ProjectWorktreeCandidate {
+        root_path: root_path.to_string(),
+        worktree_path: path.to_string_lossy().to_string(),
+        canonical_path: canonical_string.clone(),
+        branch,
+        head,
+        repo_remote,
+        is_root: canonical_string == root_path,
+        inclusion_reason: inclusion_reason.to_string(),
+    })
+}
+
+fn scan_github_worktrees_dir(root_path: &str, root_remote: &str, root_remote_key: &str) -> Vec<ProjectWorktreeCandidate> {
+    let Some((owner, repo)) = github_owner_repo_from_remote(root_remote) else {
+        return Vec::new();
+    };
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let scan_root = home.join("worktrees").join("github.com").join(owner).join(repo);
+    let Ok(entries) = fs::read_dir(scan_root) else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+
+            let candidate_root = run_git(&path, &["rev-parse", "--show-toplevel"])
+                .ok()
+                .map(|value| PathBuf::from(value.trim()))
+                .and_then(|value| value.canonicalize().ok())?;
+
+            let candidate_remote = git_remote_url(&candidate_root)?;
+            if normalize_git_remote_url(&candidate_remote) != root_remote_key {
+                return None;
+            }
+
+            candidate_from_path(
+                root_path,
+                &candidate_root,
+                git_short_branch(&candidate_root),
+                git_head(&candidate_root),
+                Some(candidate_remote),
+                "worktrees-directory-scan",
+            )
+        })
+        .collect()
+}
+
+fn dedupe_project_worktree_candidates(candidates: Vec<ProjectWorktreeCandidate>) -> Vec<ProjectWorktreeCandidate> {
+    let mut seen_paths = HashSet::new();
+    let mut seen_repo_branches = HashSet::new();
+    let mut deduped = Vec::new();
+
+    for candidate in candidates {
+        if !seen_paths.insert(candidate.canonical_path.clone()) {
+            continue;
+        }
+
+        if let (Some(remote), Some(branch)) = (&candidate.repo_remote, &candidate.branch) {
+            let repo_branch = format!("{}::{}", normalize_git_remote_url(remote), branch);
+            if !seen_repo_branches.insert(repo_branch) {
+                continue;
+            }
+        }
+
+        deduped.push(candidate);
+    }
+
+    deduped.sort_by(|a, b| b.is_root.cmp(&a.is_root).then_with(|| a.canonical_path.cmp(&b.canonical_path)));
+    deduped
+}
+
+impl From<ProjectWorktreeCandidate> for ProjectWorktree {
+    fn from(candidate: ProjectWorktreeCandidate) -> Self {
+        Self {
+            root_path: candidate.root_path,
+            worktree_path: candidate.worktree_path,
+            canonical_path: candidate.canonical_path,
+            branch: candidate.branch,
+            head: candidate.head,
+            repo_remote: candidate.repo_remote,
+            is_root: candidate.is_root,
+            inclusion_reason: candidate.inclusion_reason,
+        }
+    }
+}
+
+#[tauri::command]
+async fn discover_project_worktrees(project_path: String) -> Result<Vec<ProjectWorktree>, String> {
+    let project_path = expand_user_path(&project_path)
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve project path: {}", e))?;
+
+    let root_output = run_git(&project_path, &["rev-parse", "--show-toplevel"])
+        .map_err(|e| format!("Cannot resolve git root: {}", e))?;
+    let root_path_buf = PathBuf::from(root_output.trim())
+        .canonicalize()
+        .map_err(|e| format!("Cannot canonicalize git root: {}", e))?;
+    let root_path = root_path_buf.to_string_lossy().to_string();
+    let root_remote = git_remote_url(&root_path_buf);
+
+    let worktree_output = run_git(&root_path_buf, &["worktree", "list", "--porcelain"])
+        .map_err(|e| format!("Cannot list git worktrees: {}", e))?;
+
+    let mut candidates: Vec<ProjectWorktreeCandidate> = parse_git_worktree_porcelain(&worktree_output)
+        .into_iter()
+        .filter(|worktree| !worktree.prunable)
+        .filter_map(|worktree| {
+            candidate_from_path(
+                &root_path,
+                &expand_user_path(&worktree.path),
+                worktree.branch,
+                worktree.head,
+                root_remote.clone(),
+                "git-worktree-list",
+            )
+        })
+        .collect();
+
+    if let Some(remote) = &root_remote {
+        let root_remote_key = normalize_git_remote_url(remote);
+        candidates.extend(scan_github_worktrees_dir(&root_path, remote, &root_remote_key));
+    }
+
+    Ok(dedupe_project_worktree_candidates(candidates)
+        .into_iter()
+        .map(ProjectWorktree::from)
+        .collect())
+}
+
 #[tauri::command]
 async fn fs_exists(path: String) -> Result<bool, String> {
     Ok(std::path::Path::new(&path).exists())
@@ -5483,6 +5805,7 @@ pub fn run() {
             bd_dep_add_relation,
             bd_dep_remove_relation,
             bd_available_relation_types,
+            discover_project_worktrees,
             fs_exists,
             fs_list,
             check_for_updates,
@@ -5713,6 +6036,79 @@ mod tests {
             "expected shell-escaped issue id, got {:?}",
             plan.args[3]
         );
+    }
+
+    #[test]
+    fn parse_git_worktree_porcelain_keeps_branch_head_and_prunable_state() {
+        let output = "\
+worktree /repos/app
+HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+branch refs/heads/main
+
+worktree /worktrees/app-feature
+HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+branch refs/heads/feature/sidebar
+
+worktree /worktrees/app-old
+HEAD cccccccccccccccccccccccccccccccccccccccc
+prunable gitdir file points to non-existent location
+";
+
+        let parsed = parse_git_worktree_porcelain(output);
+
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].path, "/repos/app");
+        assert_eq!(parsed[0].branch.as_deref(), Some("main"));
+        assert_eq!(parsed[0].head.as_deref(), Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(!parsed[0].prunable);
+        assert_eq!(parsed[1].branch.as_deref(), Some("feature/sidebar"));
+        assert!(parsed[2].prunable);
+    }
+
+    #[test]
+    fn github_remote_parser_handles_common_remote_forms() {
+        assert_eq!(
+            github_owner_repo_from_remote("git@github.com:entrc/entrc-backend.git"),
+            Some(("entrc".to_string(), "entrc-backend".to_string())),
+        );
+        assert_eq!(
+            github_owner_repo_from_remote("https://github.com/entrc/entrc-backend"),
+            Some(("entrc".to_string(), "entrc-backend".to_string())),
+        );
+        assert_eq!(
+            github_owner_repo_from_remote("ssh://git@github.com/entrc/entrc-backend.git"),
+            Some(("entrc".to_string(), "entrc-backend".to_string())),
+        );
+    }
+
+    #[test]
+    fn dedupe_project_worktrees_by_canonical_path_and_repo_branch() {
+        fn candidate(path: &str, branch: Option<&str>, reason: &str) -> ProjectWorktreeCandidate {
+            ProjectWorktreeCandidate {
+                root_path: "/repos/app".to_string(),
+                worktree_path: path.to_string(),
+                canonical_path: path.to_string(),
+                branch: branch.map(String::from),
+                head: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+                repo_remote: Some("git@github.com:entrc/entrc-backend.git".to_string()),
+                is_root: path == "/repos/app",
+                inclusion_reason: reason.to_string(),
+            }
+        }
+
+        let deduped = dedupe_project_worktree_candidates(vec![
+            candidate("/repos/app", Some("main"), "git-worktree-list"),
+            candidate("/repos/app", Some("main"), "worktrees-directory-scan"),
+            candidate("/worktrees/feature-a", Some("feature/a"), "git-worktree-list"),
+            ProjectWorktreeCandidate {
+                repo_remote: Some("https://github.com/entrc/entrc-backend.git".to_string()),
+                ..candidate("/worktrees/feature-a-copy", Some("feature/a"), "worktrees-directory-scan")
+            },
+            candidate("/worktrees/feature-b", Some("feature/b"), "worktrees-directory-scan"),
+        ]);
+
+        let paths: Vec<&str> = deduped.iter().map(|item| item.canonical_path.as_str()).collect();
+        assert_eq!(paths, vec!["/repos/app", "/worktrees/feature-a", "/worktrees/feature-b"]);
     }
 
     #[test]
