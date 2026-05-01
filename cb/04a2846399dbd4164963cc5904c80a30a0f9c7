@@ -1,0 +1,29 @@
+app/utils/terminal-helpers.ts
+  2ebfc04bcc77f32f 1-87
+.beads/issues.jsonl
+  2ebfc04bcc77f32f 5
+app/components/terminal/TerminalPanel.vue
+  2ebfc04bcc77f32f 32,49,63,84,214-222,398-410,414
+tests/utils/terminal-helpers.test.ts
+  2ebfc04bcc77f32f 1-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "cb04a2846399dbd4164963cc5904c80a30a0f9c7",
+  "prompts": {
+    "2ebfc04bcc77f32f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019de488-0b18-71a1-8832-875840257666",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 155,
+      "total_deletions": 4,
+      "accepted_lines": 155,
+      "overriden_lines": 0
+    }
+  }
+}
