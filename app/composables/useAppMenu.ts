@@ -18,7 +18,7 @@ export function useAppMenu() {
 
       // App menu items
       const aboutItem = await MenuItem.new({
-        text: 'About Beads Task-Issue Tracker',
+        text: 'About BoraBR',
         action: () => {
           showAboutDialog.value = true
         },
@@ -58,7 +58,7 @@ export function useAppMenu() {
       const quitItem = await PredefinedMenuItem.new({ item: 'Quit' })
 
       const appMenu = await Submenu.new({
-        text: 'Beads Task-Issue Tracker',
+        text: 'BoraBR',
         items: [
           aboutItem,
           separator1,

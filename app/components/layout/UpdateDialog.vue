@@ -28,7 +28,7 @@ watch(open, async (isOpen) => {
   }
 })
 
-const xattrCommand = 'xattr -cr /Applications/Beads\\ Task-Issue\\ Tracker.app'
+const xattrCommand = 'xattr -cr /Applications/BoraBR.app'
 const xattrCopied = ref(false)
 
 const copyXattrCommand = async () => {

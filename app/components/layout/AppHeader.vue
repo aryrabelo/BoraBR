@@ -19,7 +19,7 @@ const emit = defineEmits<{
 }>()
 
 // Title: show project name if selected, otherwise default app title
-const displayTitle = computed(() => props.projectName || 'Beads Task-Issue Tracker')
+const displayTitle = computed(() => props.projectName || 'BoraBR')
 
 const { isDark, currentTheme, cycleTheme } = useTheme()
 const { zoomLevel, zoomIn, zoomOut, resetZoom, canZoomIn, canZoomOut } = useZoom()

@@ -6,9 +6,9 @@
   const { showUpdateDialog, showAboutDialog, showSettingsDialog, initializeMenu } = useAppMenu()
 
   useHead({
-    title: 'Beads Task-Issue Tracker',
+    title: 'BoraBR',
     meta: [
-      { name: 'description', content: 'Beads Task / Issue Tracking Manager' },
+      { name: 'description', content: 'BoraBR is an AI-native issue tracker built for local workflows' },
       { name: 'theme-color', content: () => isDark.value ? '#1e1e1e' : '#ffffff' },
     ],
     htmlAttrs: {

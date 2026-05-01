@@ -52,7 +52,7 @@ bd create "My first issue" --type task --priority p2
           </svg>
         </div>
         <div>
-          <h2 class="text-lg font-semibold">Welcome to Beads Task-Issue Tracker</h2>
+        <h2 class="text-lg font-semibold">Welcome to BoraBR</h2>
           <p class="text-sm text-muted-foreground">Follow the steps below to get started</p>
         </div>
       </div>

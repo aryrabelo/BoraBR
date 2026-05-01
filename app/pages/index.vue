@@ -114,7 +114,7 @@ const currentProjectName = computed(() => {
 })
 
 // Update window title with current project name (for Windows task switchers)
-const APP_TITLE = 'Beads Task-Issue Tracker'
+const APP_TITLE = 'BoraBR'
 const { setWindowTitle } = useTauriWindow()
 watch(currentProjectName, (name) => {
   setWindowTitle(name ? `${name} — ${APP_TITLE}` : APP_TITLE)

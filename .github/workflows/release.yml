@@ -151,9 +151,9 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           draft: true
-          name: 'Beads Task-Issue Tracker ${{ github.ref_name }}'
+          name: 'BoraBR ${{ github.ref_name }}'
           body: |
-            See the [CHANGELOG](https://github.com/w3dev33/beads-task-issue-tracker/blob/main/CHANGELOG.md) for details.
+            See the [CHANGELOG](https://github.com/aryrabelo/BoraBR/blob/main/CHANGELOG.md) for details.
 
             ## Installation
 
@@ -179,7 +179,7 @@ jobs:
         with:
           draft: false
           prerelease: true
-          name: 'Beads Task-Issue Tracker - Latest Development Build'
+          name: 'BoraBR - Latest Development Build'
           body: |
             **This is an automatically generated development build from the latest code on `master`.**
 
@@ -201,7 +201,7 @@ jobs:
 
             **To fix this**, run:
             ```bash
-            xattr -cr /Applications/Beads\ Task-Issue\ Tracker.app
+            xattr -cr /Applications/BoraBR.app
             ```
           files: |
             src-tauri/target/*/release/bundle/dmg/*.dmg

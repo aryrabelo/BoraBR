@@ -1117,7 +1117,7 @@ impl Default for AppConfig {
 fn get_config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("com.beads.manager")
+        .join("com.aryrabelo.borabr")
         .join("settings.json")
 }
 
@@ -3469,7 +3469,7 @@ async fn fs_list(path: Option<String>) -> Result<FsListResult, String> {
 // ============================================================================
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/w3dev33/beads-task-issue-tracker/releases/latest";
+const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/aryrabelo/BoraBR/releases/latest";
 
 /// Get a GitHub token from `gh auth token` (if gh CLI is installed and authenticated).
 /// Raises the API rate limit from 60/hour (anonymous) to 5,000/hour (authenticated).
@@ -3497,7 +3497,7 @@ fn get_github_token() -> Option<String> {
 /// Build a reqwest client with GitHub auth if available.
 fn github_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .user_agent("beads-task-issue-tracker")
+        .user_agent("BoraBR")
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))
 }
@@ -3578,7 +3578,7 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
             current_version: CURRENT_VERSION.to_string(),
             latest_version: CURRENT_VERSION.to_string(),
             has_update: false,
-            release_url: "https://github.com/w3dev33/beads-task-issue-tracker/releases".to_string(),
+            release_url: "https://github.com/aryrabelo/BoraBR/releases".to_string(),
             download_url: None,
             platform: get_platform_string().to_string(),
             release_notes: None,
@@ -3602,8 +3602,8 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
 
     // Fetch CHANGELOG.md via GitHub API (raw.githubusercontent CDN ignores query params for caching)
     let changelog = with_github_auth(
-        client
-            .get("https://api.github.com/repos/w3dev33/beads-task-issue-tracker/contents/CHANGELOG.md")
+            client
+            .get("https://api.github.com/repos/aryrabelo/BoraBR/contents/CHANGELOG.md")
             .header("Accept", "application/vnd.github.raw+json")
     )
         .send()
@@ -3651,8 +3651,8 @@ async fn check_for_updates_demo() -> Result<UpdateInfo, String> {
 
     // Fetch CHANGELOG.md via GitHub API (raw.githubusercontent CDN ignores query params for caching)
     let changelog = with_github_auth(
-        client
-            .get("https://api.github.com/repos/w3dev33/beads-task-issue-tracker/contents/CHANGELOG.md")
+            client
+            .get("https://api.github.com/repos/aryrabelo/BoraBR/contents/CHANGELOG.md")
             .header("Accept", "application/vnd.github.raw+json")
     )
         .send()
@@ -3741,7 +3741,7 @@ async fn download_and_install_update(download_url: String) -> Result<String, Str
 
     // Download the file
     let client = reqwest::Client::builder()
-        .user_agent("beads-task-issue-tracker")
+        .user_agent("BoraBR")
         .build()
         .map_err(|e| {
             log::error!("[download_update] Failed to create HTTP client: {}", e);
@@ -3819,20 +3819,20 @@ async fn download_and_install_update(download_url: String) -> Result<String, Str
 
 fn get_log_path() -> PathBuf {
     // Match tauri-plugin-log's LogDir resolution per platform:
-    //   macOS:   ~/Library/Logs/com.beads.manager/
-    //   Linux:   ~/.local/share/com.beads.manager/logs/  (XDG_DATA_HOME)
-    //   Windows: %APPDATA%/com.beads.manager/logs/
+    //   macOS:   ~/Library/Logs/com.aryrabelo.borabr/
+    //   Linux:   ~/.local/share/com.aryrabelo.borabr/logs/  (XDG_DATA_HOME)
+    //   Windows: %APPDATA%/com.aryrabelo.borabr/logs/
     #[cfg(target_os = "macos")]
     {
         let home = env::var("HOME").unwrap_or_default();
         PathBuf::from(home)
-            .join("Library/Logs/com.beads.manager/beads.log")
+            .join("Library/Logs/com.aryrabelo.borabr/beads.log")
     }
     #[cfg(target_os = "linux")]
     {
         dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("com.beads.manager")
+            .join("com.aryrabelo.borabr")
             .join("logs")
             .join("beads.log")
     }
@@ -3840,7 +3840,7 @@ fn get_log_path() -> PathBuf {
     {
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("com.beads.manager")
+            .join("com.aryrabelo.borabr")
             .join("logs")
             .join("beads.log")
     }
@@ -5172,7 +5172,7 @@ pub fn run() {
             )?;
 
             // Log startup info
-            log::info!("=== Beads Task-Issue Tracker starting ===");
+            log::info!("=== BoraBR starting ===");
             log::info!("[startup] Extended PATH: {}", get_extended_path());
 
             // Load config and set CLI binary (auto-detects br→bd if no config exists)

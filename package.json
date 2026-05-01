@@ -1,8 +1,8 @@
 {
-  "name": "beads-task-issue-tracker",
+  "name": "borabr",
   "type": "module",
-  "version": "1.24.4",
-  "description": "A lightweight desktop app for managing Beads issues outside your IDE",
+  "version": "1.42.0",
+  "description": "BoraBR is a desktop app for managing AI-native issues and agent workflows",
   "author": {
     "name": "Laurent Chapin",
     "email": "laurent.chapin@w3dev.fr"
@@ -10,11 +10,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/w3dev33/beads-task-issue-tracker.git"
+    "url": "https://github.com/aryrabelo/BoraBR.git"
   },
-  "homepage": "https://github.com/w3dev33/beads-task-issue-tracker",
+  "homepage": "https://github.com/aryrabelo/BoraBR",
   "bugs": {
-    "url": "https://github.com/w3dev33/beads-task-issue-tracker/issues"
+    "url": "https://github.com/aryrabelo/BoraBR/issues"
   },
   "keywords": [
     "beads",

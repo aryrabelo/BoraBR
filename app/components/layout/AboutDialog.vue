@@ -18,10 +18,10 @@ const appVersion = useRuntimeConfig().public.appVersion
       <DialogHeader class="items-center text-center">
         <img
           src="/icon.png"
-          alt="Beads Task-Issue Tracker"
+          alt="BoraBR"
           class="w-16 h-16 mb-2"
         />
-        <DialogTitle class="text-lg">Beads Task-Issue Tracker</DialogTitle>
+        <DialogTitle class="text-lg">BoraBR</DialogTitle>
         <DialogDescription as="div" class="space-y-3 pt-2">
           <p class="text-sm font-medium text-foreground">Version {{ appVersion }}</p>
           <div class="text-xs text-muted-foreground space-y-1">

@@ -1,10 +1,10 @@
 [package]
-name = "beads-issue-tracker"
-version = "1.24.4"
-description = "Beads Task-Issue Tracker - Desktop app for managing bd Beads issues"
-authors = ["Laurent Chapin <laurent.chapin@w3dev.fr>"]
+name = "borabr"
+version = "1.42.0"
+description = "BoraBR - Desktop app for managing issues and agent workflows"
+authors = ["Ary Rabelo <aryrabelo@gmail.com>", "Laurent Chapin <laurent.chapin@w3dev.fr>"]
 license = "MIT"
-repository = ""
+repository = "https://github.com/aryrabelo/BoraBR"
 edition = "2021"
 rust-version = "1.77.2"
 
