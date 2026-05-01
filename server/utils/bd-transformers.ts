@@ -1,7 +1,7 @@
 import type { Issue, IssueType, IssueStatus, IssuePriority } from '~/types/issue'
 
 // Raw issue format from bd CLI
-interface BdRawIssue {
+export interface BdRawIssue {
   id: string
   title: string
   description?: string

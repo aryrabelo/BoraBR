@@ -24,7 +24,6 @@ node_modules
 .vscode
 .claude
 .claude_root
-.beads
 *.swp
 *.swo
 .DS_Store
@@ -36,3 +35,6 @@ coverage
 # Build cache
 .temp
 *.cache
+
+# bv (beads viewer) local config and caches
+.bv/
