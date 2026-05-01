@@ -1,0 +1,27 @@
+src-tauri/src/lib.rs
+  34d5940fd6daf0d0 4,353-390,3664-3947,5808,6041-6111
+app/utils/bd-api.ts
+  34d5940fd6daf0d0 31-41,115-120
+.beads/issues.jsonl
+  34d5940fd6daf0d0 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "4e76ba8e61cf58e74be1f7b2fd934d0437df02c2",
+  "prompts": {
+    "34d5940fd6daf0d0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019de533-4043-7510-989e-7f21e675fbe0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 2348,
+      "total_deletions": 1933,
+      "accepted_lines": 825,
+      "overriden_lines": 0
+    }
+  }
+}
