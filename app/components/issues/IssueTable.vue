@@ -249,11 +249,25 @@ const useHierarchicalDisplay = computed(() => {
 const isSelected = (id: string) => props.selectedIds?.includes(id) ?? false
 const isNewlyAdded = (id: string) => props.newlyAddedIds?.has(id) ?? false
 const canOpenTaskTerminal = computed(() => props.taskTerminalsEnabled !== false && !!props.terminalProjectPath)
-const { isIssueTerminalOpen, toggleIssueTerminal, closeIssueTerminal } = useTaskTerminalSlots()
+const {
+  isIssueTerminalOpen,
+  isIssueTerminalCloseGuarded,
+  openIssueTerminal,
+  closeIssueTerminal,
+  setIssueTerminalAgentActive,
+} = useTaskTerminalSlots()
 
 const toggleTerminalForIssue = (issue: Issue, event: MouseEvent) => {
   event.stopPropagation()
-  toggleIssueTerminal(issue.id)
+  if (isIssueTerminalOpen(issue.id)) {
+    closeIssueTerminal(issue.id)
+  } else {
+    openIssueTerminal(issue.id)
+  }
+}
+
+const forceCloseTerminalForIssue = (issueId: string) => {
+  closeIssueTerminal(issueId, { force: true })
 }
 
 const toggleSelect = (id: string) => {
@@ -583,6 +597,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                         v-if="canOpenTaskTerminal"
                         :issue-id="group.epic.id"
                         :active="isIssueTerminalOpen(group.epic.id)"
+                        :close-guarded="isIssueTerminalCloseGuarded(group.epic.id)"
                         @toggle="toggleTerminalForIssue(group.epic, $event)"
                       />
                     </div>
@@ -660,7 +675,9 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                     :project-path="terminalProjectPath || ''"
                     :project-name="terminalProjectName"
                     :selected-issue="group.epic"
-                    @closed="closeIssueTerminal(group.epic.id)"
+                    protect-running-session
+                    @activity-change="setIssueTerminalAgentActive"
+                    @closed="forceCloseTerminalForIssue(group.epic.id)"
                   />
                 </TableCell>
               </TableRow>
@@ -755,6 +772,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                           v-if="canOpenTaskTerminal"
                           :issue-id="child.id"
                           :active="isIssueTerminalOpen(child.id)"
+                          :close-guarded="isIssueTerminalCloseGuarded(child.id)"
                           @toggle="toggleTerminalForIssue(child, $event)"
                         />
                       </div>
@@ -832,7 +850,9 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                         :project-path="terminalProjectPath || ''"
                         :project-name="terminalProjectName"
                         :selected-issue="child"
-                        @closed="closeIssueTerminal(child.id)"
+                        protect-running-session
+                        @activity-change="setIssueTerminalAgentActive"
+                        @closed="forceCloseTerminalForIssue(child.id)"
                       />
                     </TableCell>
                   </TableRow>
@@ -899,6 +919,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                         v-if="canOpenTaskTerminal"
                         :issue-id="issue.id"
                         :active="isIssueTerminalOpen(issue.id)"
+                        :close-guarded="isIssueTerminalCloseGuarded(issue.id)"
                         @toggle="toggleTerminalForIssue(issue, $event)"
                       />
                     </div>
@@ -976,7 +997,9 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                       :project-path="terminalProjectPath || ''"
                       :project-name="terminalProjectName"
                       :selected-issue="issue"
-                      @closed="closeIssueTerminal(issue.id)"
+                      protect-running-session
+                      @activity-change="setIssueTerminalAgentActive"
+                      @closed="forceCloseTerminalForIssue(issue.id)"
                     />
                   </TableCell>
                 </TableRow>
@@ -1044,6 +1067,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                     v-if="canOpenTaskTerminal"
                     :issue-id="issue.id"
                     :active="isIssueTerminalOpen(issue.id)"
+                    :close-guarded="isIssueTerminalCloseGuarded(issue.id)"
                     @toggle="toggleTerminalForIssue(issue, $event)"
                   />
                 </div>
@@ -1121,7 +1145,9 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                   :project-path="terminalProjectPath || ''"
                   :project-name="terminalProjectName"
                   :selected-issue="issue"
-                  @closed="closeIssueTerminal(issue.id)"
+                  protect-running-session
+                  @activity-change="setIssueTerminalAgentActive"
+                  @closed="forceCloseTerminalForIssue(issue.id)"
                 />
               </TableCell>
             </TableRow>

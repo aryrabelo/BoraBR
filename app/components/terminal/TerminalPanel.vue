@@ -10,6 +10,7 @@ import {
   PanelBottomOpen,
   Plus,
   RotateCcw,
+  ShieldAlert,
   SquareTerminal,
   Trash2,
   X,
@@ -40,10 +41,12 @@ const props = defineProps<{
   mode?: 'dock' | 'inline'
   autoStart?: boolean
   rendererTarget?: TerminalRendererTarget
+  protectRunningSession?: boolean
 }>()
 
 const emit = defineEmits<{
   closed: []
+  'activity-change': [issueId: string, active: boolean]
 }>()
 
 const panel = useTerminalPanel({ initialOpen: props.mode === 'inline' })
@@ -64,6 +67,7 @@ const isInline = computed(() => props.mode === 'inline')
 const currentProjectName = computed(() => props.projectName || projectNameFromPath(props.projectPath))
 const activeCanWrite = computed(() => !!panel.activeSession.value?.backendSessionId && panel.activeSession.value.status === 'running')
 const renderer = computed(() => resolveTerminalRenderer({ target: props.rendererTarget ?? 'libghostty' }))
+const shouldProtectRunningSession = computed(() => props.protectRunningSession ?? isInline.value)
 const helperCommands = computed(() => buildTerminalHelperCommands(props.selectedIssue
   ? {
       id: props.selectedIssue.id,
@@ -74,6 +78,16 @@ const helperCommands = computed(() => buildTerminalHelperCommands(props.selected
   : null))
 const workflowState = computed(() => props.selectedIssue ? resolveWorkflowContractState(props.selectedIssue) : null)
 const workflowNextCommands = computed(() => workflowState.value?.nextCommands ?? [])
+const selectedIssueActivity = computed(() => {
+  const issueId = props.selectedIssue?.id
+  if (!issueId || !isInline.value) return null
+  return {
+    issueId,
+    active: panel.sessions.value.some(session =>
+      session.issueId === issueId && (session.status === 'starting' || session.status === 'running'),
+    ),
+  }
+})
 
 function projectNameFromPath(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/$/, '')
@@ -186,7 +200,16 @@ async function createSession() {
 }
 
 async function closeSession(id: string) {
+  return closeSessionWithOptions(id)
+}
+
+async function closeSessionWithOptions(id: string, options: { force?: boolean } = {}) {
   const session = panel.sessions.value.find(item => item.id === id)
+  if (session && isSessionCloseGuarded(session) && !options.force) {
+    setUiMessage('Task terminal is running')
+    return false
+  }
+
   panel.closeSession(id)
   if (isInline.value && panel.sessions.value.length === 0) {
     emit('closed')
@@ -197,12 +220,31 @@ async function closeSession(id: string) {
   } catch (error) {
     setUiMessage(error instanceof Error ? error.message : String(error))
   }
+  return true
+}
+
+async function requestCloseSession(id: string) {
+  const session = panel.sessions.value.find(item => item.id === id)
+  if (!session) return
+
+  if (isSessionCloseGuarded(session)) {
+    const confirmed = window.confirm('This task terminal is still running. Stop the session and close it?')
+    if (!confirmed) return
+    await closeSessionWithOptions(id, { force: true })
+    return
+  }
+
+  await closeSessionWithOptions(id)
 }
 
 async function hidePanel() {
   if (isInline.value) {
     const hadSessions = panel.sessions.value.length > 0
-    await closeAllSessions()
+    if (hasGuardedSessions()) {
+      const confirmed = window.confirm('This task terminal is still running. Stop all active sessions and close it?')
+      if (!confirmed) return
+    }
+    await closeAllSessions({ force: true })
     if (!hadSessions) emit('closed')
     return
   }
@@ -329,9 +371,17 @@ function statusClass(status: string) {
   return 'bg-muted-foreground'
 }
 
-async function closeAllSessions() {
+function isSessionCloseGuarded(session: { status: string }) {
+  return shouldProtectRunningSession.value && (session.status === 'starting' || session.status === 'running')
+}
+
+function hasGuardedSessions() {
+  return panel.sessions.value.some(session => isSessionCloseGuarded(session))
+}
+
+async function closeAllSessions(options: { force?: boolean } = {}) {
   const sessions = [...panel.sessions.value]
-  await Promise.all(sessions.map(session => closeSession(session.id)))
+  await Promise.all(sessions.map(session => closeSessionWithOptions(session.id, options)))
 }
 
 watch(() => props.projectPath, async (nextPath, previousPath) => {
@@ -353,6 +403,15 @@ watch(panel.isOpen, (isOpen) => {
   }
 })
 
+watch(selectedIssueActivity, (next, previous) => {
+  if (previous && (!next || next.issueId !== previous.issueId)) {
+    emit('activity-change', previous.issueId, false)
+  }
+  if (next) {
+    emit('activity-change', next.issueId, next.active)
+  }
+}, { immediate: true })
+
 onMounted(async () => {
   if (isTerminalAvailable()) {
     unlisteners.push(await onTerminalData(handleTerminalData))
@@ -369,6 +428,9 @@ onUnmounted(() => {
   if (uiMessageTimer) clearTimeout(uiMessageTimer)
   for (const unlisten of unlisteners) unlisten()
   disposeActiveEmulator()
+  if (props.selectedIssue?.id && isInline.value) {
+    emit('activity-change', props.selectedIssue.id, false)
+  }
   for (const session of panel.sessions.value) {
     if (session.backendSessionId && isTerminalAvailable()) {
       closeTerminal(session.backendSessionId).catch(() => {})
@@ -414,10 +476,20 @@ onUnmounted(() => {
             <span class="h-2 w-2 rounded-full" :class="statusClass(session.status)" />
             <span class="truncate">{{ session.label }}</span>
             <button
+              v-if="isSessionCloseGuarded(session)"
+              type="button"
+              class="rounded p-0.5 text-amber-300 opacity-80 hover:bg-muted hover:opacity-100"
+              title="Stop active task terminal and close"
+              @click.stop="requestCloseSession(session.id)"
+            >
+              <ShieldAlert class="h-3 w-3" />
+            </button>
+            <button
+              v-else
               type="button"
               class="rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100"
               title="Close session"
-              @click.stop="closeSession(session.id)"
+              @click.stop="requestCloseSession(session.id)"
             >
               <X class="h-3 w-3" />
             </button>
