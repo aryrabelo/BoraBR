@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { Issue } from '~/types/issue'
 import {
+  buildActionCenterIssuePrompt,
   buildActionCenterProjectActionState,
   buildActionCenterProjectIdleState,
   countActionCenterInProgressIssues,
@@ -24,6 +25,12 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
 }
 
 describe('Action Center project state', () => {
+  it('builds the prompt used by Action Center issue actions', () => {
+    expect(buildActionCenterIssuePrompt(makeIssue({ id: 'borabr-vox.3' }))).toBe(
+      'Continuar a tarefa borabr-vox.3 usando a skill BR',
+    )
+  })
+
   it('counts in-progress issues for a saved project snapshot', () => {
     const issues = [
       makeIssue({ id: 'active', status: 'in_progress' }),

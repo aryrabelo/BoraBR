@@ -32,6 +32,10 @@ interface BuildActionCenterProjectIdleStateOptions {
 
 export const normalizeActionCenterProjectPath = (path: string) => path.replace(/\/+$/, '')
 
+export function buildActionCenterIssuePrompt(issue: Pick<Issue, 'id'>): string {
+  return `Continuar a tarefa ${issue.id} usando a skill BR`
+}
+
 export function pickVisibleActionCenterItems<T extends { projectPath: string }>(
   items: T[],
   limit: number,

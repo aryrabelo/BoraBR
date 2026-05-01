@@ -43,10 +43,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '~/components/ui/tooltip'
-import { Bell, ArrowLeft, SquareTerminal } from 'lucide-vue-next'
+import { Bell, ArrowLeft, Copy, SquareTerminal } from 'lucide-vue-next'
 import { cmuxFocusSurface, cmuxSendPrompt } from '~/utils/bd-api'
 import { resolveTaskTerminalSource } from '~/utils/task-terminal-source'
 import {
+  buildActionCenterIssuePrompt,
   buildActionCenterProjectActionState,
   buildActionCenterProjectIdleState,
   normalizeActionCenterProjectPath,
@@ -697,10 +698,6 @@ const handleSnoozeActionItem = (item: ActionCenterItem) => {
   actionCenterNow.value = Date.now()
 }
 
-const buildActionCenterCmuxPrompt = (item: ActionCenterIssueItem) => {
-  return `Continuar a tarefa ${item.id} usando a skill BR`
-}
-
 const handleRunActionItemInCmux = async (item: ActionCenterItem) => {
   if (item.actionKind !== 'issue') return
 
@@ -713,8 +710,22 @@ const handleRunActionItemInCmux = async (item: ActionCenterItem) => {
 
   try {
     await cmuxFocusSurface(item.cmuxSurfaceId)
-    await cmuxSendPrompt(item.cmuxSurfaceId, buildActionCenterCmuxPrompt(item))
+    await cmuxSendPrompt(item.cmuxSurfaceId, buildActionCenterIssuePrompt(item))
     notifySuccess('Prompt enviado ao CMUX')
+  } catch (error) {
+    actionCenterTerminalError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+const handleCopyActionItemPrompt = async (item: ActionCenterItem) => {
+  if (item.actionKind !== 'issue') return
+
+  actionCenterTerminalError.value = ''
+  actionCenterTerminalErrorItemId.value = item.actionId
+
+  try {
+    await navigator.clipboard.writeText(buildActionCenterIssuePrompt(item))
+    notifySuccess('Prompt copiado')
   } catch (error) {
     actionCenterTerminalError.value = error instanceof Error ? error.message : String(error)
   }
@@ -1355,6 +1366,16 @@ watch(
                               </Button>
                               <Button
                                 v-if="action.actionKind === 'issue'"
+                                variant="outline"
+                                size="sm"
+                                class="h-7 text-xs"
+                                @click="handleCopyActionItemPrompt(action)"
+                              >
+                                <Copy class="h-3.5 w-3.5" />
+                                Copiar prompt
+                              </Button>
+                              <Button
+                                v-if="action.actionKind === 'issue'"
                                 variant="secondary"
                                 size="sm"
                                 class="h-7 text-xs"
@@ -1663,6 +1684,16 @@ watch(
                         <div class="mt-3 flex flex-wrap gap-2">
                           <Button size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
                             {{ action.actionKind === 'project_idle' ? 'Abrir projeto' : 'Abrir issue' }}
+                          </Button>
+                          <Button
+                            v-if="action.actionKind === 'issue'"
+                            variant="outline"
+                            size="sm"
+                            class="h-7 text-xs"
+                            @click="handleCopyActionItemPrompt(action)"
+                          >
+                            <Copy class="h-3.5 w-3.5" />
+                            Copiar prompt
                           </Button>
                           <Button
                             v-if="action.actionKind === 'issue'"
