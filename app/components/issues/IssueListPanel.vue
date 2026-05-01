@@ -26,6 +26,9 @@ defineProps<{
   sortDirection: 'asc' | 'desc'
   newlyAddedIds: Set<string>
   pinnedIds?: string[]
+  terminalProjectPath?: string
+  terminalProjectName?: string
+  taskTerminalsEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -111,6 +114,9 @@ const handleSort = (field: string | null, direction: 'asc' | 'desc') => {
       :external-sort-direction="sortDirection"
       :newly-added-ids="newlyAddedIds"
       :pinned-ids="pinnedIds"
+      :terminal-project-path="terminalProjectPath"
+      :terminal-project-name="terminalProjectName"
+      :task-terminals-enabled="taskTerminalsEnabled"
       @select="emit('select', $event)"
       @edit="emit('edit', $event)"
       @deselect="emit('deselect')"

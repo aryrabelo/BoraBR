@@ -14,6 +14,8 @@ import TypeBadge from '~/components/issues/TypeBadge.vue'
 import StatusBadge from '~/components/issues/StatusBadge.vue'
 import PriorityBadge from '~/components/issues/PriorityBadge.vue'
 import LabelBadge from '~/components/issues/LabelBadge.vue'
+import TerminalPanel from '~/components/terminal/TerminalPanel.vue'
+import IssueTerminalToggle from '~/components/issues/IssueTerminalToggle.vue'
 import { Button } from '~/components/ui/button'
 import {
   Tooltip,
@@ -22,6 +24,7 @@ import {
 } from '~/components/ui/tooltip'
 import { Ban } from 'lucide-vue-next'
 import { useKeyboardNavigation } from '~/composables/useKeyboardNavigation'
+import { useTaskTerminalSlots } from '~/composables/useTaskTerminalSlots'
 
 const props = defineProps<{
   issues: Issue[]
@@ -36,6 +39,9 @@ const props = defineProps<{
   externalSortDirection?: 'asc' | 'desc'
   newlyAddedIds?: Set<string>
   pinnedIds?: string[]
+  terminalProjectPath?: string
+  terminalProjectName?: string
+  taskTerminalsEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -222,6 +228,13 @@ const useHierarchicalDisplay = computed(() => {
 
 const isSelected = (id: string) => props.selectedIds?.includes(id) ?? false
 const isNewlyAdded = (id: string) => props.newlyAddedIds?.has(id) ?? false
+const canOpenTaskTerminal = computed(() => props.taskTerminalsEnabled !== false && !!props.terminalProjectPath)
+const { isIssueTerminalOpen, toggleIssueTerminal, closeIssueTerminal } = useTaskTerminalSlots()
+
+const toggleTerminalForIssue = (issue: Issue, event: MouseEvent) => {
+  event.stopPropagation()
+  toggleIssueTerminal(issue.id)
+}
 
 const toggleSelect = (id: string) => {
   const current = props.selectedIds ?? []
@@ -253,6 +266,7 @@ const isSomeSelected = computed(() => {
 const visibleColumns = computed(() =>
   props.columns.filter((col) => col.visible)
 )
+const terminalColspan = computed(() => visibleColumns.value.length + (props.multiSelectMode ? 1 : 0))
 
 // Get short display ID: extract the key suffix (last segment after final hyphen)
 // e.g., "task-issue-tracker-demo-22g" → "22g", "beads-demo-5tg.2" → "5tg.2"
@@ -543,7 +557,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                   </template>
 
                   <template v-else-if="col.id === 'title'">
-                    <span class="text-xs font-medium line-clamp-2 break-words">{{ group.epic.title }}</span>
+                    <div class="flex items-start gap-2">
+                      <span class="min-w-0 flex-1 text-xs font-medium line-clamp-2 break-words">{{ group.epic.title }}</span>
+                      <IssueTerminalToggle
+                        v-if="canOpenTaskTerminal"
+                        :issue-id="group.epic.id"
+                        :active="isIssueTerminalOpen(group.epic.id)"
+                        @toggle="toggleTerminalForIssue(group.epic, $event)"
+                      />
+                    </div>
                   </template>
 
                   <template v-else-if="col.id === 'status'">
@@ -605,6 +627,23 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                 </TableCell>
               </TableRow>
 
+              <TableRow
+                v-if="canOpenTaskTerminal && isIssueTerminalOpen(group.epic.id)"
+                class="bg-card hover:bg-card"
+              >
+                <TableCell :colspan="terminalColspan" class="!p-0 !whitespace-normal">
+                  <TerminalPanel
+                    mode="inline"
+                    auto-start
+                    renderer-target="libghostty"
+                    :project-path="terminalProjectPath || ''"
+                    :project-name="terminalProjectName"
+                    :selected-issue="group.epic"
+                    @closed="closeIssueTerminal(group.epic.id)"
+                  />
+                </TableCell>
+              </TableRow>
+
               <!-- Progress bar row (collapsed epics only) -->
               <TableRow
                 v-if="!isExpanded(group.epic.id) && group.childCount > 0 && (group.epic.status === 'in_progress' || !!group.inProgressChild)"
@@ -636,23 +675,22 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
 
               <!-- Child rows (when expanded) -->
               <template v-if="isExpanded(group.epic.id)">
-                <TableRow
-                  v-for="child in group.children"
-                  :key="child.id"
-                  :data-issue-id="child.id"
-                  class="cursor-pointer border-l-4 border-r-4"
-                  :class="[
-                    getEpicBorderColors(groupIndex).left,
-                    getEpicBorderColors(groupIndex).right,
-                    multiSelectMode
-                      ? (isSelected(child.id) ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50')
-                      : (selectedId === child.id ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50'),
-                    isNewlyAdded(child.id) ? 'issue-highlight-new' : '',
-                    isFocused(child.id) ? 'bg-primary/10 ring-1 ring-inset ring-primary/40' : ''
-                  ]"
-                  @click="setFocused(child.id); multiSelectMode ? toggleSelect(child.id) : $emit('select', child)"
-                  @dblclick="!multiSelectMode && $emit('edit', child)"
-                >
+                <template v-for="child in group.children" :key="child.id">
+                  <TableRow
+                    :data-issue-id="child.id"
+                    class="cursor-pointer border-l-4 border-r-4"
+                    :class="[
+                      getEpicBorderColors(groupIndex).left,
+                      getEpicBorderColors(groupIndex).right,
+                      multiSelectMode
+                        ? (isSelected(child.id) ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50')
+                        : (selectedId === child.id ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50'),
+                      isNewlyAdded(child.id) ? 'issue-highlight-new' : '',
+                      isFocused(child.id) ? 'bg-primary/10 ring-1 ring-inset ring-primary/40' : ''
+                    ]"
+                    @click="setFocused(child.id); multiSelectMode ? toggleSelect(child.id) : $emit('select', child)"
+                    @dblclick="!multiSelectMode && $emit('edit', child)"
+                  >
                   <TableCell v-if="multiSelectMode" class="w-10 px-2 !py-1.5">
                     <button
                       class="flex items-center justify-center w-4 h-4 rounded border transition-colors"
@@ -690,7 +728,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                     </template>
 
                     <template v-else-if="col.id === 'title'">
-                      <span class="text-xs font-medium line-clamp-2 break-words">{{ child.title }}</span>
+                      <div class="flex items-start gap-2">
+                        <span class="min-w-0 flex-1 text-xs font-medium line-clamp-2 break-words">{{ child.title }}</span>
+                        <IssueTerminalToggle
+                          v-if="canOpenTaskTerminal"
+                          :issue-id="child.id"
+                          :active="isIssueTerminalOpen(child.id)"
+                          @toggle="toggleTerminalForIssue(child, $event)"
+                        />
+                      </div>
                     </template>
 
                     <template v-else-if="col.id === 'status'">
@@ -750,27 +796,44 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                       <span class="text-xs">{{ getIssueField(child, col.id) }}</span>
                     </template>
                   </TableCell>
-                </TableRow>
+                  </TableRow>
+
+                  <TableRow
+                    v-if="canOpenTaskTerminal && isIssueTerminalOpen(child.id)"
+                    class="bg-card hover:bg-card"
+                  >
+                    <TableCell :colspan="terminalColspan" class="!p-0 !whitespace-normal">
+                      <TerminalPanel
+                        mode="inline"
+                        auto-start
+                        renderer-target="libghostty"
+                        :project-path="terminalProjectPath || ''"
+                        :project-name="terminalProjectName"
+                        :selected-issue="child"
+                        @closed="closeIssueTerminal(child.id)"
+                      />
+                    </TableCell>
+                  </TableRow>
+                </template>
               </template>
             </template>
 
             <!-- Non-epic issues (orphans or regular issues) -->
             <template v-else>
-              <TableRow
-                v-for="issue in group.children"
-                :key="issue.id"
-                :data-issue-id="issue.id"
-                class="cursor-pointer"
-                :class="[
-                  multiSelectMode
-                    ? (isSelected(issue.id) ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50')
-                    : (selectedId === issue.id ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50'),
-                  isNewlyAdded(issue.id) ? 'issue-highlight-new' : '',
-                  isFocused(issue.id) ? 'bg-primary/10 ring-1 ring-inset ring-primary/40' : ''
-                ]"
-                @click="setFocused(issue.id); multiSelectMode ? toggleSelect(issue.id) : $emit('select', issue)"
-                @dblclick="!multiSelectMode && $emit('edit', issue)"
-              >
+              <template v-for="issue in group.children" :key="issue.id">
+                <TableRow
+                  :data-issue-id="issue.id"
+                  class="cursor-pointer"
+                  :class="[
+                    multiSelectMode
+                      ? (isSelected(issue.id) ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50')
+                      : (selectedId === issue.id ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50'),
+                    isNewlyAdded(issue.id) ? 'issue-highlight-new' : '',
+                    isFocused(issue.id) ? 'bg-primary/10 ring-1 ring-inset ring-primary/40' : ''
+                  ]"
+                  @click="setFocused(issue.id); multiSelectMode ? toggleSelect(issue.id) : $emit('select', issue)"
+                  @dblclick="!multiSelectMode && $emit('edit', issue)"
+                >
                 <TableCell v-if="multiSelectMode" class="w-10 px-2 !py-1.5">
                   <button
                     class="flex items-center justify-center w-4 h-4 rounded border transition-colors"
@@ -808,7 +871,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                   </template>
 
                   <template v-else-if="col.id === 'title'">
-                    <span class="text-xs font-medium line-clamp-2 break-words">{{ issue.title }}</span>
+                    <div class="flex items-start gap-2">
+                      <span class="min-w-0 flex-1 text-xs font-medium line-clamp-2 break-words">{{ issue.title }}</span>
+                      <IssueTerminalToggle
+                        v-if="canOpenTaskTerminal"
+                        :issue-id="issue.id"
+                        :active="isIssueTerminalOpen(issue.id)"
+                        @toggle="toggleTerminalForIssue(issue, $event)"
+                      />
+                    </div>
                   </template>
 
                   <template v-else-if="col.id === 'status'">
@@ -868,28 +939,45 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                     <span class="text-xs">{{ getIssueField(issue, col.id) }}</span>
                   </template>
                 </TableCell>
-              </TableRow>
+                </TableRow>
+
+                <TableRow
+                  v-if="canOpenTaskTerminal && isIssueTerminalOpen(issue.id)"
+                  class="bg-card hover:bg-card"
+                >
+                  <TableCell :colspan="terminalColspan" class="!p-0 !whitespace-normal">
+                    <TerminalPanel
+                      mode="inline"
+                      auto-start
+                      renderer-target="libghostty"
+                      :project-path="terminalProjectPath || ''"
+                      :project-name="terminalProjectName"
+                      :selected-issue="issue"
+                      @closed="closeIssueTerminal(issue.id)"
+                    />
+                  </TableCell>
+                </TableRow>
+              </template>
             </template>
           </template>
         </template>
 
         <!-- Flat display (fallback when no grouped issues) -->
         <template v-else>
-          <TableRow
-            v-for="issue in sortedIssues"
-            :key="issue.id"
-            :data-issue-id="issue.id"
-            class="cursor-pointer"
-            :class="[
-              multiSelectMode
-                ? (isSelected(issue.id) ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50')
-                : (selectedId === issue.id ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50'),
-              isNewlyAdded(issue.id) ? 'issue-highlight-new' : '',
-              isFocused(issue.id) ? 'bg-primary/10 ring-1 ring-inset ring-primary/40' : ''
-            ]"
-            @click="setFocused(issue.id); multiSelectMode ? toggleSelect(issue.id) : $emit('select', issue)"
-            @dblclick="!multiSelectMode && $emit('edit', issue)"
-          >
+          <template v-for="issue in sortedIssues" :key="issue.id">
+            <TableRow
+              :data-issue-id="issue.id"
+              class="cursor-pointer"
+              :class="[
+                multiSelectMode
+                  ? (isSelected(issue.id) ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50')
+                  : (selectedId === issue.id ? 'bg-accent/50 hover:bg-accent/70' : 'hover:bg-muted/50'),
+                isNewlyAdded(issue.id) ? 'issue-highlight-new' : '',
+                isFocused(issue.id) ? 'bg-primary/10 ring-1 ring-inset ring-primary/40' : ''
+              ]"
+              @click="setFocused(issue.id); multiSelectMode ? toggleSelect(issue.id) : $emit('select', issue)"
+              @dblclick="!multiSelectMode && $emit('edit', issue)"
+            >
             <TableCell v-if="multiSelectMode" class="w-10 px-2 !py-1.5">
               <button
                 class="flex items-center justify-center w-4 h-4 rounded border transition-colors"
@@ -927,7 +1015,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
               </template>
 
               <template v-else-if="col.id === 'title'">
-                <span class="text-xs font-medium line-clamp-2 break-words">{{ issue.title }}</span>
+                <div class="flex items-start gap-2">
+                  <span class="min-w-0 flex-1 text-xs font-medium line-clamp-2 break-words">{{ issue.title }}</span>
+                  <IssueTerminalToggle
+                    v-if="canOpenTaskTerminal"
+                    :issue-id="issue.id"
+                    :active="isIssueTerminalOpen(issue.id)"
+                    @toggle="toggleTerminalForIssue(issue, $event)"
+                  />
+                </div>
               </template>
 
               <template v-else-if="col.id === 'status'">
@@ -987,7 +1083,25 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                 <span class="text-xs">{{ getIssueField(issue, col.id) }}</span>
               </template>
             </TableCell>
-          </TableRow>
+            </TableRow>
+
+            <TableRow
+              v-if="canOpenTaskTerminal && isIssueTerminalOpen(issue.id)"
+              class="bg-card hover:bg-card"
+            >
+              <TableCell :colspan="terminalColspan" class="!p-0 !whitespace-normal">
+                <TerminalPanel
+                  mode="inline"
+                  auto-start
+                  renderer-target="libghostty"
+                  :project-path="terminalProjectPath || ''"
+                  :project-name="terminalProjectName"
+                  :selected-issue="issue"
+                  @closed="closeIssueTerminal(issue.id)"
+                />
+              </TableCell>
+            </TableRow>
+          </template>
         </template>
       </TableBody>
     </Table>

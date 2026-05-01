@@ -28,14 +28,22 @@ import {
   type TerminalEventPayload,
 } from '~/utils/terminal-api'
 import { TERMINAL_PANEL_MAX_HEIGHT, TERMINAL_PANEL_MIN_HEIGHT, useTerminalPanel } from '~/composables/useTerminalPanel'
+import { resolveTerminalRenderer, type TerminalRendererTarget } from '~/utils/terminal-renderer'
 
 const props = defineProps<{
   projectPath: string
   projectName?: string
   selectedIssue?: Issue | null
+  mode?: 'dock' | 'inline'
+  autoStart?: boolean
+  rendererTarget?: TerminalRendererTarget
 }>()
 
-const panel = useTerminalPanel()
+const emit = defineEmits<{
+  closed: []
+}>()
+
+const panel = useTerminalPanel({ initialOpen: props.mode === 'inline' })
 const outputRef = ref<HTMLElement | null>(null)
 const commandInput = ref('')
 const isCreatingSession = ref(false)
@@ -46,8 +54,10 @@ const uiMessage = ref('')
 let uiMessageTimer: ReturnType<typeof setTimeout> | null = null
 const unlisteners: UnlistenFn[] = []
 
+const isInline = computed(() => props.mode === 'inline')
 const currentProjectName = computed(() => props.projectName || projectNameFromPath(props.projectPath))
 const activeCanWrite = computed(() => !!panel.activeSession.value?.backendSessionId && panel.activeSession.value.status === 'running')
+const renderer = computed(() => resolveTerminalRenderer({ target: props.rendererTarget ?? 'libghostty' }))
 
 function projectNameFromPath(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/$/, '')
@@ -123,12 +133,25 @@ async function createSession() {
 async function closeSession(id: string) {
   const session = panel.sessions.value.find(item => item.id === id)
   panel.closeSession(id)
+  if (isInline.value && panel.sessions.value.length === 0) {
+    emit('closed')
+  }
   if (!session?.backendSessionId || !isTerminalAvailable()) return
   try {
     await closeTerminal(session.backendSessionId)
   } catch (error) {
     setUiMessage(error instanceof Error ? error.message : String(error))
   }
+}
+
+async function hidePanel() {
+  if (isInline.value) {
+    const hadSessions = panel.sessions.value.length > 0
+    await closeAllSessions()
+    if (!hadSessions) emit('closed')
+    return
+  }
+  panel.closePanel()
 }
 
 function clearActiveSession() {
@@ -257,15 +280,24 @@ watch(panel.activeSessionId, () => {
 })
 
 onMounted(async () => {
-  if (!isTerminalAvailable()) return
-  unlisteners.push(await onTerminalData(handleTerminalData))
-  unlisteners.push(await onTerminalExit(handleTerminalExit))
-  unlisteners.push(await onTerminalError(handleTerminalError))
+  if (isTerminalAvailable()) {
+    unlisteners.push(await onTerminalData(handleTerminalData))
+    unlisteners.push(await onTerminalExit(handleTerminalExit))
+    unlisteners.push(await onTerminalError(handleTerminalError))
+  }
+  if (props.autoStart && panel.sessions.value.length === 0) {
+    await createSession()
+  }
 })
 
 onUnmounted(() => {
   if (uiMessageTimer) clearTimeout(uiMessageTimer)
   for (const unlisten of unlisteners) unlisten()
+  for (const session of panel.sessions.value) {
+    if (session.backendSessionId && isTerminalAvailable()) {
+      closeTerminal(session.backendSessionId).catch(() => {})
+    }
+  }
 })
 </script>
 
@@ -273,6 +305,8 @@ onUnmounted(() => {
   <section
     v-if="panel.isOpen.value"
     class="relative shrink-0 border-t border-border bg-card text-card-foreground flex flex-col overflow-hidden"
+    :data-renderer-target="renderer.target"
+    :data-renderer-active="renderer.active"
     :style="{ height: `${panel.height.value}px`, minHeight: `${TERMINAL_PANEL_MIN_HEIGHT}px` }"
   >
     <button
@@ -331,7 +365,7 @@ onUnmounted(() => {
         <Button variant="ghost" size="icon-sm" title="Paste" :disabled="!panel.activeSession.value" @click="pasteIntoCommand">
           <ClipboardPaste class="h-4 w-4" />
         </Button>
-        <Button variant="ghost" size="icon-sm" title="Hide terminal" @click="panel.closePanel">
+        <Button variant="ghost" size="icon-sm" title="Hide terminal" @click="hidePanel">
           <PanelBottomClose class="h-4 w-4" />
         </Button>
       </div>
@@ -370,7 +404,7 @@ onUnmounted(() => {
   </section>
 
   <div
-    v-else
+    v-else-if="!isInline"
     class="flex h-11 shrink-0 items-center justify-between gap-3 border-t border-border bg-card px-3 text-sm text-muted-foreground"
   >
     <button type="button" class="flex min-w-0 items-center gap-2 hover:text-foreground" @click="panel.openPanel">

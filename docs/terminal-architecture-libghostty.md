@@ -15,6 +15,12 @@ BoraBR should build the terminal feature around a stable terminal session bounda
 
 This keeps the risky native-renderer work isolated from the core lifecycle work: create, focus, resize, write input, stream output, restart, close, and refresh Beads data after CLI mutations.
 
+## Implementation Update
+
+`borabr-m0z.6` adds task-scoped terminal slots directly under issue rows. Those slots request the `libghostty` renderer target through a renderer adapter boundary and fall back to the DOM scrollback renderer when the native libghostty bridge is not present in the current build.
+
+The fallback is intentionally explicit in code via `resolveTerminalRenderer`: the target remains `libghostty`, while the active renderer is `dom-scrollback` until a macOS native surface bridge can prove focus, input, resize, packaging, and signing. This keeps the task-terminal UX and PTY lifecycle shippable without hiding the fact that GPU rendering is still blocked on native integration work.
+
 ## Current App Fit
 
 The app is already a Tauri 2 + Nuxt 4 desktop application. The Rust backend exposes commands through `#[tauri::command]`, uses `tauri::Emitter` to notify the frontend, and already watches `.beads/` for changes. The frontend already consumes Tauri commands from `app/utils/bd-api.ts` and listens to native events in `app/composables/useChangeDetection.ts`.
@@ -100,10 +106,10 @@ Rules for BoraBR:
 2. Use `portable-pty` for shell creation, input writes, output reader threads, resizing, restart, and cleanup.
 3. Emit PTY output and lifecycle events through Tauri.
 4. Add a Vue composable such as `useTerminalSessions` for command calls, event listeners, and cleanup.
-5. Add the docked panel UI using a `TerminalRenderer` adapter interface.
-6. Implement the first adapter with `xterm.js`.
-7. Add a libghostty spike behind a second adapter, starting with macOS only.
-8. Promote libghostty once embedding, focus/input, packaging, and Beads dogfood workflows pass.
+5. Add the docked and task-inline panel UI using a `TerminalRenderer` adapter interface.
+6. Implement the first adapter with a DOM scrollback renderer, or `xterm.js` if terminal correctness becomes the immediate bottleneck before the native bridge lands.
+7. Add a libghostty spike behind the primary adapter target, starting with macOS only.
+8. Promote libghostty to the active renderer once embedding, focus/input, packaging, and Beads dogfood workflows pass.
 
 ## Source Notes
 

@@ -912,6 +912,9 @@ watch(
             :sort-direction="sortDirection"
             :newly-added-ids="newlyAddedIds"
             :pinned-ids="pinnedIssueIds"
+            :terminal-project-path="beadsPath"
+            :terminal-project-name="currentProjectName"
+            task-terminals-enabled
             @add="handleAddIssue"
             @delete="handleDeleteIssue"
             @toggle-multi-select="toggleMultiSelect"
@@ -1141,6 +1144,9 @@ watch(
           :sort-direction="sortDirection"
           :newly-added-ids="newlyAddedIds"
           :pinned-ids="pinnedIssueIds"
+          :terminal-project-path="beadsPath"
+          :terminal-project-name="currentProjectName"
+          task-terminals-enabled
           @add="handleAddIssue"
           @delete="handleDeleteIssue"
           @toggle-multi-select="toggleMultiSelect"
