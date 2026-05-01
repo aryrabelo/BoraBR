@@ -739,12 +739,13 @@ const handleRemoveLabelFilter = (label: string) => {
 }
 
 // KPI filter handlers
-type KpiFilter = 'total' | 'open' | 'in_progress' | 'blocked'
+type KpiFilter = 'total' | 'open' | 'in_progress' | 'in_review' | 'blocked'
 const activeKpiFilter = computed<KpiFilter | null>(() => {
   const statusFilters = filters.value.status
   if (statusFilters.length === 0) return null
   if (statusFilters.length === 1 && statusFilters[0] === 'open') return 'open'
   if (statusFilters.length === 1 && statusFilters[0] === 'in_progress') return 'in_progress'
+  if (statusFilters.length === 1 && statusFilters[0] === 'in_review') return 'in_review'
   if (statusFilters.length === 1 && statusFilters[0] === 'blocked') return 'blocked'
   return null
 })
@@ -756,6 +757,8 @@ const handleKpiClick = (kpi: KpiFilter) => {
     setStatusFilter(['open'])
   } else if (kpi === 'in_progress') {
     setStatusFilter(['in_progress'])
+  } else if (kpi === 'in_review') {
+    setStatusFilter(['in_review'])
   } else if (kpi === 'blocked') {
     setStatusFilter(['blocked'])
   }
@@ -837,10 +840,11 @@ watch(
             <PathSelector v-if="!showOnboarding" ref="pathSelectorRef" :is-loading="isLoading" @change="handlePathChange" @reset="handleReset" />
 
             <div v-if="stats" class="space-y-4 mt-6">
-              <div class="grid grid-cols-4 gap-1.5">
+              <div class="grid grid-cols-5 gap-1.5">
                 <KpiCard title="Total" :value="stats.total" :active="activeKpiFilter === null && filters.status.length === 0" @click="handleKpiClick('total')" />
                 <KpiCard title="Open" :value="stats.open" color="var(--color-status-open)" :active="activeKpiFilter === 'open'" @click="handleKpiClick('open')" />
                 <KpiCard title="In Progress" :value="stats.inProgress" color="var(--color-status-in-progress)" :active="activeKpiFilter === 'in_progress'" @click="handleKpiClick('in_progress')" />
+                <KpiCard title="In Review" :value="stats.inReview" color="var(--color-status-in-review)" :active="activeKpiFilter === 'in_review'" @click="handleKpiClick('in_review')" />
                 <KpiCard title="Blocked" :value="stats.blocked" color="var(--color-status-blocked)" :active="activeKpiFilter === 'blocked'" @click="handleKpiClick('blocked')" />
               </div>
             </div>

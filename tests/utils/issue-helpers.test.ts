@@ -156,8 +156,10 @@ describe('compareChildIssues', () => {
 // Sort orders
 // ---------------------------------------------------------------------------
 describe('sort orders', () => {
-  it('status: in_progress < open < blocked < closed', () => {
+  it('status: in_progress < in_review < open < blocked < closed', () => {
     expect(statusOrder['in_progress']).toBeLessThan(statusOrder['open']!)
+    expect(statusOrder['in_progress']).toBeLessThan(statusOrder['in_review']!)
+    expect(statusOrder['in_review']).toBeLessThan(statusOrder['open']!)
     expect(statusOrder['open']).toBeLessThan(statusOrder['blocked']!)
     expect(statusOrder['blocked']).toBeLessThan(statusOrder['closed']!)
   })
@@ -194,6 +196,25 @@ describe('sortIssues', () => {
   it('sorts by status using custom order', () => {
     const result = sortIssues(issues, 'status', 'asc')
     expect(result.map(i => i.status)).toEqual(['in_progress', 'open', 'closed'])
+  })
+
+  it('sorts review changes requested open issues above normal open issues', () => {
+    const normalOpen = makeIssue({ id: 'b', status: 'open', labels: [] })
+    const reviewChanges = makeIssue({ id: 'c', status: 'open', labels: ['review:changes_requested'] })
+    const active = makeIssue({ id: 'a', status: 'in_progress', labels: [] })
+
+    const result = sortIssues([normalOpen, reviewChanges, active], 'status', 'asc')
+
+    expect(result.map(i => i.id)).toEqual(['a', 'c', 'b'])
+  })
+
+  it('keeps review changes requested open issues above normal open issues in descending status sort', () => {
+    const normalOpen = makeIssue({ id: 'b', status: 'open', labels: [] })
+    const reviewChanges = makeIssue({ id: 'c', status: 'open', labels: ['review:changes_requested'] })
+
+    const result = sortIssues([normalOpen, reviewChanges], 'status', 'desc')
+
+    expect(result.map(i => i.id)).toEqual(['c', 'b'])
   })
 
   it('sorts by priority', () => {
@@ -281,6 +302,15 @@ describe('filterIssues', () => {
   it('excludes closed and tombstone by default (no status filter)', () => {
     const result = filterIssues(issues, noFilters, noExclusions)
     expect(result.map(i => i.id)).toEqual(['1', '2'])
+  })
+
+  it('includes in_review issues by default', () => {
+    const result = filterIssues([
+      ...issues,
+      makeIssue({ id: '5', status: 'in_review' }),
+    ], noFilters, noExclusions)
+
+    expect(result.map(i => i.id)).toEqual(['1', '2', '5'])
   })
 
   it('shows only selected statuses when status filter active', () => {

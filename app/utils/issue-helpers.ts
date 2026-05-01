@@ -97,9 +97,14 @@ export function compareChildIssues(a: Issue, b: Issue): number {
 /** Sort orders for status, priority, and type fields */
 export const statusOrder: Record<string, number> = {
   in_progress: 0,
-  open: 1,
-  blocked: 2,
-  closed: 3,
+  in_review: 1,
+  open: 2,
+  blocked: 3,
+  closed: 4,
+  deferred: 5,
+  pinned: 6,
+  hooked: 7,
+  tombstone: 8,
 }
 
 export const priorityOrder: Record<string, number> = {
@@ -116,6 +121,23 @@ export const typeOrder: Record<string, number> = {
   task: 2,
   epic: 3,
   chore: 4,
+}
+
+export const REVIEW_CHANGES_REQUESTED_LABEL = 'review:changes_requested'
+
+export function hasReviewChangesRequested(issue: Issue): boolean {
+  return issue.labels?.some(label => label.toLowerCase() === REVIEW_CHANGES_REQUESTED_LABEL) ?? false
+}
+
+function getStatusSortRank(issue: Issue): number {
+  return statusOrder[issue.status] ?? 99
+}
+
+function compareReviewChangesRequested(a: Issue, b: Issue): number {
+  if (a.status !== 'open' || b.status !== 'open') return 0
+  const aRank = hasReviewChangesRequested(a) ? 0 : 1
+  const bRank = hasReviewChangesRequested(b) ? 0 : 1
+  return aRank - bRank
 }
 
 /**
@@ -151,8 +173,12 @@ export function sortIssues(issues: Issue[], field: string | null, direction: 'as
       case 'id':
         return naturalCompare(a.id.toLowerCase(), b.id.toLowerCase()) * dir
       case 'status':
-        aVal = statusOrder[a.status] ?? 99
-        bVal = statusOrder[b.status] ?? 99
+        if (getStatusSortRank(a) === getStatusSortRank(b)) {
+          const reviewRank = compareReviewChangesRequested(a, b)
+          if (reviewRank !== 0) return reviewRank
+        }
+        aVal = getStatusSortRank(a)
+        bVal = getStatusSortRank(b)
         break
       case 'priority':
         aVal = priorityOrder[a.priority] ?? 99
@@ -351,6 +377,7 @@ export function computeStatsFromIssues(issues: Issue[]): DashboardStats {
     total: issues.length,
     open: 0,
     inProgress: 0,
+    inReview: 0,
     blocked: 0,
     closed: 0,
     ready: 0,
@@ -371,6 +398,9 @@ export function computeStatsFromIssues(issues: Issue[]): DashboardStats {
         break
       case 'in_progress':
         stats.inProgress++
+        break
+      case 'in_review':
+        stats.inReview++
         break
       case 'blocked':
         stats.blocked++

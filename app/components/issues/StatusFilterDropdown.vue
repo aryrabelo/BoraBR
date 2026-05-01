@@ -27,6 +27,7 @@ defineEmits<{
 const statusOptions: { value: IssueStatus; label: string }[] = [
   { value: 'open', label: 'Open' },
   { value: 'in_progress', label: 'In Progress' },
+  { value: 'in_review', label: 'In Review' },
   { value: 'blocked', label: 'Blocked' },
   { value: 'closed', label: 'Closed' },
   { value: 'deferred', label: 'Deferred' },

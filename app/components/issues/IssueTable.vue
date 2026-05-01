@@ -12,6 +12,7 @@ import {
 } from '~/components/ui/table'
 import TypeBadge from '~/components/issues/TypeBadge.vue'
 import StatusBadge from '~/components/issues/StatusBadge.vue'
+import ReviewStateBadge from '~/components/issues/ReviewStateBadge.vue'
 import PriorityBadge from '~/components/issues/PriorityBadge.vue'
 import LabelBadge from '~/components/issues/LabelBadge.vue'
 import TerminalPanel from '~/components/terminal/TerminalPanel.vue'
@@ -101,16 +102,17 @@ const toggleSort = (columnId: string) => {
 }
 
 // Sort order for status and priority
-// in_progress first (active work), then open (ready to start), then blocked, then closed
+// in_progress first (active work), then in_review, then open, blocked, closed
 const statusOrder: Record<IssueStatus, number> = {
   in_progress: 0,
-  open: 1,
-  blocked: 2,
-  closed: 3,
-  deferred: 4,
-  pinned: 5,
-  hooked: 6,
-  tombstone: 7,
+  in_review: 1,
+  open: 2,
+  blocked: 3,
+  closed: 4,
+  deferred: 5,
+  pinned: 6,
+  hooked: 7,
+  tombstone: 8,
 }
 
 const priorityOrder: Record<IssuePriority, number> = {
@@ -154,6 +156,20 @@ const naturalCompare = (a: string, b: string): number => {
   return 0
 }
 
+const hasReviewChangesRequested = (issue: Issue): boolean =>
+  issue.labels?.some(label => label.toLowerCase() === 'review:changes_requested') ?? false
+
+const statusRank = (issue: Issue): number => {
+  return statusOrder[issue.status] ?? 99
+}
+
+const compareReviewChangesRequested = (a: Issue, b: Issue): number => {
+  if (a.status !== 'open' || b.status !== 'open') return 0
+  const aRank = hasReviewChangesRequested(a) ? 0 : 1
+  const bRank = hasReviewChangesRequested(b) ? 0 : 1
+  return aRank - bRank
+}
+
 const sortedIssues = computed(() => {
   // When external sort is provided, data is already sorted by the composable
   if (props.externalSortColumn !== undefined) {
@@ -178,8 +194,12 @@ const sortedIssues = computed(() => {
         // Use natural sort for IDs
         return naturalCompare(a.id.toLowerCase(), b.id.toLowerCase()) * dir
       case 'status':
-        aVal = statusOrder[a.status] ?? 99
-        bVal = statusOrder[b.status] ?? 99
+        if (statusRank(a) === statusRank(b)) {
+          const reviewRank = compareReviewChangesRequested(a, b)
+          if (reviewRank !== 0) return reviewRank
+        }
+        aVal = statusRank(a)
+        bVal = statusRank(b)
         break
       case 'priority':
         aVal = priorityOrder[a.priority] ?? 99
@@ -571,6 +591,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                   <template v-else-if="col.id === 'status'">
                     <div class="flex items-center gap-1">
                       <StatusBadge :status="group.epic.status" size="sm" />
+                      <ReviewStateBadge v-if="group.epic.status === 'in_review'" :issue="group.epic" />
                       <Tooltip v-if="group.epic.blockedBy?.length">
                         <TooltipTrigger as-child>
                           <Ban class="w-3 h-3 text-red-400" />
@@ -742,6 +763,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                     <template v-else-if="col.id === 'status'">
                       <div class="flex items-center gap-1">
                         <StatusBadge :status="child.status" size="sm" />
+                        <ReviewStateBadge v-if="child.status === 'in_review'" :issue="child" />
                         <Tooltip v-if="child.blockedBy?.length">
                           <TooltipTrigger as-child>
                             <Ban class="w-3 h-3 text-red-400" />
@@ -885,6 +907,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                   <template v-else-if="col.id === 'status'">
                     <div class="flex items-center gap-1">
                       <StatusBadge :status="issue.status" size="sm" />
+                      <ReviewStateBadge v-if="issue.status === 'in_review'" :issue="issue" />
                       <Tooltip v-if="issue.blockedBy?.length">
                         <TooltipTrigger as-child>
                           <Ban class="w-3 h-3 text-red-400" />
@@ -1029,6 +1052,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
               <template v-else-if="col.id === 'status'">
                 <div class="flex items-center gap-1">
                   <StatusBadge :status="issue.status" size="sm" />
+                  <ReviewStateBadge v-if="issue.status === 'in_review'" :issue="issue" />
                   <Tooltip v-if="issue.blockedBy?.length">
                     <TooltipTrigger as-child>
                       <Ban class="w-3 h-3 text-red-400" />

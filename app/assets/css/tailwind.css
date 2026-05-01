@@ -43,6 +43,7 @@
   /* Status colors */
   --color-status-open: #3b82f6;
   --color-status-in-progress: #15803d;
+  --color-status-in-review: #7c3aed;
   --color-status-blocked: #ef4444;
   --color-status-closed: #6b7280;
 
@@ -70,6 +71,9 @@
   --badge-status-in-progress: #15803d;
   --badge-status-in-progress-deep: #052e16;
   --badge-status-in-progress-glow: transparent;
+  --badge-status-in-review: #7c3aed;
+  --badge-status-in-review-deep: #4c1d95;
+  --badge-status-in-review-glow: transparent;
   --badge-status-blocked: #ef4444;
   --badge-status-blocked-deep: #7f1d1d;
   --badge-status-blocked-glow: transparent;
@@ -133,6 +137,9 @@
   --badge-status-in-progress: #00ff87;
   --badge-status-in-progress-deep: #00cc6a;
   --badge-status-in-progress-glow: rgba(0, 255, 135, 0.4);
+  --badge-status-in-review: #a78bfa;
+  --badge-status-in-review-deep: #7c3aed;
+  --badge-status-in-review-glow: rgba(167, 139, 250, 0.4);
   --badge-status-blocked: #ff3366;
   --badge-status-blocked-deep: #cc1a4a;
   --badge-status-blocked-glow: rgba(255, 51, 102, 0.4);
@@ -189,6 +196,7 @@
   /* Status/Type/Priority theme colors for KPI cards, charts, etc. */
   --color-status-open: #00d4ff;
   --color-status-in-progress: #00ff87;
+  --color-status-in-review: #a78bfa;
   --color-status-blocked: #ff3366;
   --color-status-closed: #8892a0;
 
@@ -280,6 +288,11 @@
 .bg-status-in-progress-gradient {
   background: linear-gradient(135deg, var(--badge-status-in-progress), var(--badge-status-in-progress-deep));
   box-shadow: 0 0 8px var(--badge-status-in-progress-glow), 0 0 2px var(--badge-status-in-progress-glow);
+}
+
+.bg-status-in-review-gradient {
+  background: linear-gradient(135deg, var(--badge-status-in-review), var(--badge-status-in-review-deep));
+  box-shadow: 0 0 8px var(--badge-status-in-review-glow), 0 0 2px var(--badge-status-in-review-glow);
 }
 
 .bg-status-blocked-gradient {
@@ -441,6 +454,7 @@ body {
 /* ── Light: flat badges (no gradient) ────────────────────────────────────────── */
 [data-theme="light"] .bg-status-open-gradient { background: var(--badge-status-open); }
 [data-theme="light"] .bg-status-in-progress-gradient { background: var(--badge-status-in-progress); }
+[data-theme="light"] .bg-status-in-review-gradient { background: var(--badge-status-in-review); }
 [data-theme="light"] .bg-status-blocked-gradient { background: var(--badge-status-blocked); }
 [data-theme="light"] .bg-status-closed-gradient { background: var(--badge-status-closed); }
 [data-theme="light"] .bg-status-deferred-gradient { background: var(--badge-status-deferred); }
@@ -461,6 +475,7 @@ body {
 /* ── Dark Flat: solid color badges (no gradient) ────────────────────────────── */
 [data-theme="flat"] .bg-status-open-gradient { background: var(--badge-status-open); }
 [data-theme="flat"] .bg-status-in-progress-gradient { background: var(--badge-status-in-progress); }
+[data-theme="flat"] .bg-status-in-review-gradient { background: var(--badge-status-in-review); }
 [data-theme="flat"] .bg-status-blocked-gradient { background: var(--badge-status-blocked); }
 [data-theme="flat"] .bg-status-closed-gradient { background: var(--badge-status-closed); }
 [data-theme="flat"] .bg-status-deferred-gradient { background: var(--badge-status-deferred); }
@@ -512,6 +527,12 @@ body {
   color: #00ff87 !important;
   border-color: rgba(0, 255, 135, 0.5) !important;
   box-shadow: inset 0 0 12px rgba(0, 255, 135, 0.1), 0 0 8px rgba(0, 255, 135, 0.15);
+}
+[data-theme="neon"] .bg-status-in-review-gradient {
+  background: rgba(167, 139, 250, 0.12) !important;
+  color: #a78bfa !important;
+  border-color: rgba(167, 139, 250, 0.5) !important;
+  box-shadow: inset 0 0 12px rgba(167, 139, 250, 0.1), 0 0 8px rgba(167, 139, 250, 0.15);
 }
 [data-theme="neon"] .bg-status-blocked-gradient {
   background: rgba(255, 51, 102, 0.12) !important;

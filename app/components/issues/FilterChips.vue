@@ -43,6 +43,7 @@ const hasFilters = computed(
 const statusLabels: Record<IssueStatus, string> = {
   open: 'Open',
   in_progress: 'In Progress',
+  in_review: 'In Review',
   blocked: 'Blocked',
   closed: 'Closed',
   deferred: 'Deferred',

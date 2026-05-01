@@ -58,6 +58,30 @@ export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null):
       title: 'Mark selected issue in progress',
     },
     {
+      id: 'review-start',
+      label: 'Review',
+      command: `br update ${issue.id} --status in_review && br comments add ${issue.id} --message "review:started {\\"tool\\":\\"codex\\",\\"started_at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}"`,
+      title: 'Mark selected issue in review and record review start',
+    },
+    {
+      id: 'review-fail',
+      label: 'Changes',
+      command: `br update ${issue.id} --status open --assignee "" --labels "review:changes_requested" && br comments add ${issue.id} --message "review:failed {\\"reason\\":\\"Changes requested\\",\\"at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}"`,
+      title: 'Reopen selected issue with review changes requested',
+    },
+    {
+      id: 'review-pass',
+      label: 'Pass',
+      command: `br comments add ${issue.id} --message "review:passed {\\"summary\\":\\"No actionable findings\\",\\"at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}"`,
+      title: 'Record a passing review comment',
+    },
+    {
+      id: 'review-question',
+      label: 'Question',
+      command: `br update ${issue.id} --status blocked --labels "blocked:needs_answer" && br comments add ${issue.id} --message "review:needs_answer {\\"question\\":\\"Question for human\\",\\"at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}"`,
+      title: 'Block selected issue with a human review question',
+    },
+    {
       id: 'close',
       label: 'Close',
       command: `br close ${issue.id}`,

@@ -3,6 +3,19 @@ import { invoke } from '@tauri-apps/api/core'
 import { matchProbeProject } from '~/utils/probe-adapter'
 import type { ProbeMetricsResponse, ProbeProject } from '~/utils/probe-adapter'
 
+export interface AgentProcessStatusRequest {
+  tool?: string
+  pid?: number
+  sessionId?: string
+}
+
+export interface AgentProcessStatusResponse {
+  tool?: string
+  pid?: number
+  sessionId?: string
+  status: 'running' | 'not_running' | 'unknown'
+}
+
 // Type declarations for Tauri detection
 declare global {
   interface Window {
@@ -557,6 +570,18 @@ export async function bdAddComment(id: string, content: string, path?: string): 
     method: 'POST',
     body: { content },
   })
+}
+
+export async function agentProcessStatus(request: AgentProcessStatusRequest): Promise<AgentProcessStatusResponse> {
+  if (isTauri()) {
+    return invoke<AgentProcessStatusResponse>('agent_process_status', { request })
+  }
+  return {
+    tool: request.tool,
+    pid: request.pid,
+    sessionId: request.sessionId,
+    status: 'unknown',
+  }
 }
 
 export async function bdAddDependency(issueId: string, blockerId: string, path?: string): Promise<{ success: boolean }> {

@@ -25,6 +25,7 @@ describe('computeStatsFromIssues', () => {
     expect(stats.total).toBe(0)
     expect(stats.open).toBe(0)
     expect(stats.inProgress).toBe(0)
+    expect(stats.inReview).toBe(0)
     expect(stats.blocked).toBe(0)
     expect(stats.closed).toBe(0)
     expect(stats.byType.bug).toBe(0)
@@ -60,6 +61,18 @@ describe('computeStatsFromIssues', () => {
     ]
     const stats = computeStatsFromIssues(issues)
     expect(stats.inProgress).toBe(2)
+  })
+
+  it('counts in_review separately', () => {
+    const issues = [
+      makeIssue({ id: '1', status: 'in_review' }),
+      makeIssue({ id: '2', status: 'in_review' }),
+      makeIssue({ id: '3', status: 'open' }),
+    ]
+    const stats = computeStatsFromIssues(issues)
+    expect(stats.inReview).toBe(2)
+    expect(stats.open).toBe(1)
+    expect(stats.inProgress).toBe(0)
   })
 
   it('counts blocked separately', () => {
@@ -116,15 +129,17 @@ describe('computeStatsFromIssues', () => {
     const issues = [
       makeIssue({ id: '1', status: 'open', type: 'bug', priority: 'p0' }),
       makeIssue({ id: '2', status: 'in_progress', type: 'task', priority: 'p2' }),
-      makeIssue({ id: '3', status: 'blocked', type: 'feature', priority: 'p1' }),
-      makeIssue({ id: '4', status: 'closed', type: 'task', priority: 'p3' }),
-      makeIssue({ id: '5', status: 'deferred', type: 'chore', priority: 'p4' }),
-      makeIssue({ id: '6', status: 'tombstone' as any, type: 'bug', priority: 'p0' }),
+      makeIssue({ id: '3', status: 'in_review', type: 'feature', priority: 'p1' }),
+      makeIssue({ id: '4', status: 'blocked', type: 'feature', priority: 'p1' }),
+      makeIssue({ id: '5', status: 'closed', type: 'task', priority: 'p3' }),
+      makeIssue({ id: '6', status: 'deferred', type: 'chore', priority: 'p4' }),
+      makeIssue({ id: '7', status: 'tombstone' as any, type: 'bug', priority: 'p0' }),
     ]
     const stats = computeStatsFromIssues(issues)
-    expect(stats.total).toBe(5)
+    expect(stats.total).toBe(6)
     expect(stats.open).toBe(2) // open + deferred
     expect(stats.inProgress).toBe(1)
+    expect(stats.inReview).toBe(1)
     expect(stats.blocked).toBe(1)
     expect(stats.closed).toBe(1)
   })

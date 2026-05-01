@@ -423,6 +423,23 @@ pub struct UpdatePayload {
     pub cwd: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentProcessStatusRequest {
+    pub tool: Option<String>,
+    pub pid: Option<u32>,
+    #[serde(rename = "sessionId")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentProcessStatusResponse {
+    pub tool: Option<String>,
+    pub pid: Option<u32>,
+    #[serde(rename = "sessionId")]
+    pub session_id: Option<String>,
+    pub status: String,
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -451,11 +468,57 @@ fn normalize_issue_type(issue_type: &str) -> String {
 }
 
 fn normalize_issue_status(status: &str) -> String {
-    let valid_statuses = ["open", "in_progress", "blocked", "closed", "deferred", "tombstone", "pinned", "hooked"];
+    let valid_statuses = ["open", "in_progress", "in_review", "blocked", "closed", "deferred", "tombstone", "pinned", "hooked"];
     if valid_statuses.contains(&status) {
         status.to_string()
     } else {
         "open".to_string()
+    }
+}
+
+fn classify_agent_process_status<F>(
+    request: AgentProcessStatusRequest,
+    probe_process: F,
+) -> AgentProcessStatusResponse
+where
+    F: FnOnce(u32) -> Option<bool>,
+{
+    let status = match request.pid {
+        Some(pid) => match probe_process(pid) {
+            Some(true) => "running",
+            Some(false) => "not_running",
+            None => "unknown",
+        },
+        None => "unknown",
+    };
+
+    AgentProcessStatusResponse {
+        tool: request.tool,
+        pid: request.pid,
+        session_id: request.session_id,
+        status: status.to_string(),
+    }
+}
+
+fn probe_process_running(pid: u32) -> Option<bool> {
+    if pid == 0 {
+        return None;
+    }
+
+    #[cfg(unix)]
+    {
+        Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .ok()
+            .map(|status| status.success())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        None
     }
 }
 
@@ -2793,6 +2856,11 @@ async fn bd_update(id: String, updates: UpdatePayload) -> Result<Option<Issue>, 
 }
 
 #[tauri::command]
+async fn agent_process_status(request: AgentProcessStatusRequest) -> Result<AgentProcessStatusResponse, String> {
+    Ok(classify_agent_process_status(request, probe_process_running))
+}
+
+#[tauri::command]
 async fn bd_close(id: String, options: CwdOptions) -> Result<serde_json::Value, String> {
     log_info!("[bd_close] Closing issue: {} with cwd: {:?}", id, options.cwd);
 
@@ -4855,6 +4923,7 @@ pub fn run() {
             delete_external_data,
             patch_external_data,
             launch_probe,
+            agent_process_status,
             terminal::terminal_create,
             terminal::terminal_write,
             terminal::terminal_resize,
@@ -4901,6 +4970,40 @@ mod tests {
         assert_eq!(issues.len(), 2);
         assert_eq!(issues[0].id, "abc-123");
         assert_eq!(issues[1].id, "def-456");
+    }
+
+    #[test]
+    fn normalize_issue_status_accepts_in_review() {
+        assert_eq!(normalize_issue_status("in_review"), "in_review");
+    }
+
+    #[test]
+    fn agent_process_status_is_unknown_without_pid() {
+        let request = AgentProcessStatusRequest {
+            tool: Some("codex".to_string()),
+            pid: None,
+            session_id: Some("sess-1".to_string()),
+        };
+
+        let response = classify_agent_process_status(request, |_| None);
+
+        assert_eq!(response.status, "unknown");
+        assert_eq!(response.tool.as_deref(), Some("codex"));
+        assert_eq!(response.session_id.as_deref(), Some("sess-1"));
+    }
+
+    #[test]
+    fn agent_process_status_uses_best_effort_probe() {
+        let request = AgentProcessStatusRequest {
+            tool: Some("claude".to_string()),
+            pid: Some(4242),
+            session_id: None,
+        };
+
+        let response = classify_agent_process_status(request, |pid| Some(pid == 4242));
+
+        assert_eq!(response.status, "running");
+        assert_eq!(response.pid, Some(4242));
     }
 
     #[test]

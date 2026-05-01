@@ -15,7 +15,7 @@ import {
   TooltipTrigger,
 } from '~/components/ui/tooltip'
 
-type KpiFilter = 'total' | 'open' | 'in_progress' | 'blocked'
+type KpiFilter = 'total' | 'open' | 'in_progress' | 'in_review' | 'blocked'
 
 const props = withDefaults(defineProps<{
   stats: DashboardStats | null
@@ -23,7 +23,7 @@ const props = withDefaults(defineProps<{
   inProgressIssues: Issue[]
   pinnedIssues: Issue[]
   pinnedSortMode?: PinnedSortMode
-  kpiGridCols?: 2 | 4
+  kpiGridCols?: 2 | 4 | 5
   activeKpiFilter: KpiFilter | null
   statusFilters: string[]
   showOnboarding?: boolean
@@ -48,15 +48,22 @@ const isChartsCollapsed = useProjectStorage('chartsCollapsed', true)
 const isInProgressCollapsed = useProjectStorage('inProgressCollapsed', true)
 const isPinnedCollapsed = useProjectStorage('pinnedCollapsed', false)
 const isReadyCollapsed = useProjectStorage('readyCollapsed', true)
+
+const kpiGridClass = computed(() => {
+  if (props.kpiGridCols === 5) return 'grid-cols-5 gap-1.5'
+  if (props.kpiGridCols === 4) return 'grid-cols-4 gap-1.5'
+  return 'grid-cols-2 gap-3'
+})
 </script>
 
 <template>
   <template v-if="stats">
     <!-- KPI cards (hidden in desktop scrollable section where KPIs are in the fixed section) -->
-    <div v-if="!hideKpis" :class="['grid', kpiGridCols === 4 ? 'grid-cols-4 gap-1.5' : 'grid-cols-2 gap-3']">
+    <div v-if="!hideKpis" :class="['grid', kpiGridClass]">
       <KpiCard title="Total" :value="stats.total" :active="activeKpiFilter === null && statusFilters.length === 0" @click="emit('kpi-click', 'total')" />
       <KpiCard title="Open" :value="stats.open" color="var(--color-status-open)" :active="activeKpiFilter === 'open'" @click="emit('kpi-click', 'open')" />
       <KpiCard title="In Progress" :value="stats.inProgress" color="var(--color-status-in-progress)" :active="activeKpiFilter === 'in_progress'" @click="emit('kpi-click', 'in_progress')" />
+      <KpiCard title="In Review" :value="stats.inReview" color="var(--color-status-in-review)" :active="activeKpiFilter === 'in_review'" @click="emit('kpi-click', 'in_review')" />
       <KpiCard title="Blocked" :value="stats.blocked" color="var(--color-status-blocked)" :active="activeKpiFilter === 'blocked'" @click="emit('kpi-click', 'blocked')" />
     </div>
 

@@ -23,6 +23,10 @@ describe('terminal helpers', () => {
       'issue-id',
       'show',
       'start',
+      'review-start',
+      'review-fail',
+      'review-pass',
+      'review-question',
       'close',
       'comment',
       'label',
@@ -34,5 +38,13 @@ describe('terminal helpers', () => {
     expect(helpers.find(helper => helper.id === 'issue-id')?.command).toBe('borabr-m0z.4')
     expect(helpers.find(helper => helper.id === 'show')?.command).toBe('br show borabr-m0z.4')
     expect(helpers.find(helper => helper.id === 'comment')?.command).toBe('br comments add borabr-m0z.4 --message "Comment"')
+    expect(helpers.find(helper => helper.id === 'review-start')?.command)
+      .toContain('br update borabr-m0z.4 --status in_review')
+    expect(helpers.find(helper => helper.id === 'review-fail')?.command)
+      .toContain('review:changes_requested')
+    expect(helpers.find(helper => helper.id === 'review-pass')?.command)
+      .toContain('review:passed')
+    expect(helpers.find(helper => helper.id === 'review-question')?.command)
+      .toContain('blocked:needs_answer')
   })
 })
