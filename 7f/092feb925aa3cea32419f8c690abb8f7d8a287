@@ -1,0 +1,53 @@
+server/utils/bd-transformers.ts
+  f2cd77ea13af79dc 4
+.beads/metadata.json
+  2ebfc04bcc77f32f 1-4
+.beads/config.yaml
+  2ebfc04bcc77f32f 1-4
+docs/terminal-architecture-libghostty.md
+  2ebfc04bcc77f32f 1-126
+server/api/bd/ready.get.ts
+  f2cd77ea13af79dc 3,18
+.gitignore
+  f2cd77ea13af79dc 38-40
+.beads/.gitignore
+  2ebfc04bcc77f32f 1-40
+.beads/issues.jsonl
+  2ebfc04bcc77f32f 2,8
+  f2cd77ea13af79dc 1,3-7,9-13
+server/api/bd/list.get.ts
+  f2cd77ea13af79dc 3,32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "7f092feb925aa3cea32419f8c690abb8f7d8a287",
+  "prompts": {
+    "2ebfc04bcc77f32f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019de488-0b18-71a1-8832-875840257666",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 177,
+      "total_deletions": 2,
+      "accepted_lines": 176,
+      "overriden_lines": 0
+    },
+    "f2cd77ea13af79dc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019de45e-eb8d-72f2-b899-8393e57f1e12",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 28,
+      "total_deletions": 12,
+      "accepted_lines": 19,
+      "overriden_lines": 0
+    }
+  }
+}
