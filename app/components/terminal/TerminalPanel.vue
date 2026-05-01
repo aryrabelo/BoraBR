@@ -30,6 +30,7 @@ import {
 import { TERMINAL_PANEL_MAX_HEIGHT, TERMINAL_PANEL_MIN_HEIGHT, useTerminalPanel } from '~/composables/useTerminalPanel'
 import { resolveTerminalRenderer, type TerminalRendererTarget } from '~/utils/terminal-renderer'
 import { buildTerminalHelperCommands, type TerminalHelperCommand } from '~/utils/terminal-helpers'
+import { resolveWorkflowContractState } from '~/utils/workflow-contracts'
 
 const props = defineProps<{
   projectPath: string
@@ -60,7 +61,16 @@ const isInline = computed(() => props.mode === 'inline')
 const currentProjectName = computed(() => props.projectName || projectNameFromPath(props.projectPath))
 const activeCanWrite = computed(() => !!panel.activeSession.value?.backendSessionId && panel.activeSession.value.status === 'running')
 const renderer = computed(() => resolveTerminalRenderer({ target: props.rendererTarget ?? 'libghostty' }))
-const helperCommands = computed(() => buildTerminalHelperCommands(props.selectedIssue ? { id: props.selectedIssue.id, title: props.selectedIssue.title } : null))
+const helperCommands = computed(() => buildTerminalHelperCommands(props.selectedIssue
+  ? {
+      id: props.selectedIssue.id,
+      title: props.selectedIssue.title,
+      status: props.selectedIssue.status,
+      labels: props.selectedIssue.labels,
+    }
+  : null))
+const workflowState = computed(() => props.selectedIssue ? resolveWorkflowContractState(props.selectedIssue) : null)
+const workflowNextCommands = computed(() => workflowState.value?.nextCommands ?? [])
 
 function projectNameFromPath(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/$/, '')
@@ -387,6 +397,12 @@ onUnmounted(() => {
       <div class="flex h-7 shrink-0 items-center gap-3 border-b border-white/10 px-3 text-[11px] text-zinc-400">
         <span class="truncate">{{ panel.activeSession.value.projectPath }}</span>
         <span v-if="panel.activeSession.value.issueId" class="shrink-0 text-zinc-500">{{ panel.activeSession.value.issueId }}</span>
+        <span
+          v-if="workflowState && workflowState.kind !== 'none'"
+          class="shrink-0 rounded border border-violet-400/30 px-1.5 py-0.5 text-[10px] uppercase text-violet-200"
+        >
+          {{ workflowState.label }}
+        </span>
         <span class="ml-auto shrink-0 capitalize">{{ panel.activeSession.value.status }}</span>
       </div>
 
@@ -394,6 +410,23 @@ onUnmounted(() => {
         ref="outputRef"
         class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-5"
       >{{ panel.activeSession.value.buffer }}</pre>
+
+      <div
+        v-if="workflowState && workflowState.kind !== 'none' && workflowNextCommands.length > 0"
+        class="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 px-3"
+      >
+        <span class="shrink-0 text-[10px] uppercase text-zinc-500">{{ workflowState.workflowId || 'workflow' }}</span>
+        <button
+          v-for="command in workflowNextCommands"
+          :key="command"
+          type="button"
+          class="max-w-72 shrink-0 truncate rounded border border-violet-400/20 px-2 py-1 font-mono text-[11px] text-violet-100 transition-colors hover:border-violet-300/60"
+          :title="command"
+          @click="stageHelperCommand({ id: `workflow-next-command:${command}`, label: command, command, title: command })"
+        >
+          {{ command }}
+        </button>
+      </div>
 
       <div class="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 px-3">
         <button

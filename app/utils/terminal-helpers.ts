@@ -1,6 +1,10 @@
+import { detectWorkflowContractLabels } from '~/utils/workflow-contracts'
+
 export interface TerminalHelperIssue {
   id: string
   title?: string
+  status?: string
+  labels?: string[]
 }
 
 export interface TerminalHelperCommand {
@@ -38,6 +42,31 @@ export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null):
 
   if (!issue?.id) return projectCommands
 
+  const hasWorkflowContract = detectWorkflowContractLabels(issue.labels ?? []).length > 0
+
+  const workflowCommands: TerminalHelperCommand[] = hasWorkflowContract
+    ? [
+        {
+          id: 'workflow-check',
+          label: 'Workflow',
+          command: `br workflow check ${issue.id}`,
+          title: 'Check workflow contract state for selected issue',
+        },
+        {
+          id: 'workflow-steps',
+          label: 'Steps',
+          command: `br workflow steps ${issue.id} --apply`,
+          title: 'Apply deterministic workflow steps returned by br',
+        },
+        {
+          id: 'workflow-next',
+          label: 'Next',
+          command: `br workflow next ${issue.id}`,
+          title: 'Stage next deterministic workflow command',
+        },
+      ]
+    : []
+
   const issueCommands: TerminalHelperCommand[] = [
     {
       id: 'issue-id',
@@ -51,6 +80,7 @@ export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null):
       command: `br show ${issue.id}`,
       title: 'Show selected issue',
     },
+    ...workflowCommands,
     {
       id: 'start',
       label: 'Start',
@@ -59,9 +89,9 @@ export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null):
     },
     {
       id: 'review-start',
-      label: 'Review',
+      label: hasWorkflowContract ? 'Legacy Review' : 'Review',
       command: `br update ${issue.id} --status in_review && br comments add ${issue.id} --message "review:started {\\"tool\\":\\"codex\\",\\"started_at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}"`,
-      title: 'Mark selected issue in review and record review start',
+      title: hasWorkflowContract ? 'Legacy in_review path; prefer br workflow commands' : 'Mark selected issue in review and record review start',
     },
     {
       id: 'review-fail',

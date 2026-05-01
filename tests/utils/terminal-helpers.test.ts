@@ -48,4 +48,24 @@ describe('terminal helpers', () => {
     expect(helpers.find(helper => helper.id === 'review-question')?.command)
       .toContain('--add-label "blocked:needs_answer"')
   })
+
+  it('prefers deterministic workflow commands when a workflow label is present', () => {
+    const helpers = buildTerminalHelperCommands({
+      id: 'borabr-m0z.9',
+      title: 'Align workflow contracts',
+      labels: ['workflow:review'],
+    })
+
+    expect(helpers.map(helper => helper.id).slice(0, 5)).toEqual([
+      'issue-id',
+      'show',
+      'workflow-check',
+      'workflow-steps',
+      'workflow-next',
+    ])
+    expect(helpers.find(helper => helper.id === 'workflow-check')?.command).toBe('br workflow check borabr-m0z.9')
+    expect(helpers.find(helper => helper.id === 'workflow-steps')?.command).toBe('br workflow steps borabr-m0z.9 --apply')
+    expect(helpers.find(helper => helper.id === 'workflow-next')?.command).toBe('br workflow next borabr-m0z.9')
+    expect(helpers.find(helper => helper.id === 'review-start')?.label).toBe('Legacy Review')
+  })
 })
