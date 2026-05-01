@@ -66,7 +66,7 @@ export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null):
     {
       id: 'review-fail',
       label: 'Changes',
-      command: `br update ${issue.id} --status open --assignee "" --labels "review:changes_requested" && br comments add ${issue.id} --message "review:failed {\\"reason\\":\\"Changes requested\\",\\"at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}"`,
+      command: `br update ${issue.id} --status open --assignee "" --add-label "review:changes_requested" && br comments add ${issue.id} --message "review:failed {\\"reason\\":\\"Changes requested\\",\\"at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}"`,
       title: 'Reopen selected issue with review changes requested',
     },
     {
@@ -78,7 +78,7 @@ export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null):
     {
       id: 'review-question',
       label: 'Question',
-      command: `br update ${issue.id} --status blocked --labels "blocked:needs_answer" && br comments add ${issue.id} --message "review:needs_answer {\\"question\\":\\"Question for human\\",\\"at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}"`,
+      command: `br update ${issue.id} --status blocked --add-label "blocked:needs_answer" && br comments add ${issue.id} --message "review:needs_answer {\\"question\\":\\"Question for human\\",\\"at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}"`,
       title: 'Block selected issue with a human review question',
     },
     {
@@ -96,7 +96,7 @@ export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null):
     {
       id: 'label',
       label: 'Label',
-      command: `br update ${issue.id} --labels "label"`,
+      command: `br update ${issue.id} --add-label "label"`,
       title: 'Set labels on selected issue',
     },
     {
