@@ -23,9 +23,15 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '~/components/ui/tooltip'
-import { Ban } from 'lucide-vue-next'
+import { Ban, SquareTerminal } from 'lucide-vue-next'
 import { useKeyboardNavigation } from '~/composables/useKeyboardNavigation'
 import { useTaskTerminalSlots } from '~/composables/useTaskTerminalSlots'
+import { cmuxFocusSurface } from '~/utils/bd-api'
+import {
+  buildTaskTerminalAssigneeDisplay,
+  focusTaskTerminalSource,
+  resolveTaskTerminalSource,
+} from '~/utils/task-terminal-source'
 
 const props = defineProps<{
   issues: Issue[]
@@ -259,16 +265,30 @@ const {
 
 const toggleTerminalForIssue = (issue: Issue, event: MouseEvent) => {
   event.stopPropagation()
-  if (isIssueTerminalOpen(issue.id)) {
-    closeIssueTerminal(issue.id)
-  } else {
-    openIssueTerminal(issue.id)
-  }
+  const source = resolveTaskTerminalSource(issue)
+  focusTaskTerminalSource(source, {
+    focusCmuxSurface: async surfaceId => {
+      await cmuxFocusSurface(surfaceId)
+    },
+    openEmbedded: () => {
+      if (isIssueTerminalOpen(issue.id)) {
+        closeIssueTerminal(issue.id)
+      } else {
+        openIssueTerminal(issue.id)
+      }
+    },
+  }).catch((error) => {
+    console.error('Failed to open task terminal', error)
+  })
 }
 
 const forceCloseTerminalForIssue = (issueId: string) => {
   closeIssueTerminal(issueId, { force: true })
 }
+
+const getTaskTerminalAssigneeDisplay = (issue: Issue) => buildTaskTerminalAssigneeDisplay(issue)
+
+const isExternalCmuxTerminal = (issue: Issue) => resolveTaskTerminalSource(issue).origin === 'external-cmux'
 
 const toggleSelect = (id: string) => {
   const current = props.selectedIds ?? []
@@ -635,7 +655,11 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                   </template>
 
                   <template v-else-if="col.id === 'assignee'">
-                    <span class="text-xs">{{ group.epic.assignee || '-' }}</span>
+                    <div class="flex items-center gap-1.5 text-xs" :title="getTaskTerminalAssigneeDisplay(group.epic).title">
+                      <SquareTerminal v-if="isExternalCmuxTerminal(group.epic)" class="h-3 w-3 text-emerald-500" />
+                      <span>{{ getTaskTerminalAssigneeDisplay(group.epic).primary }}</span>
+                      <span v-if="getTaskTerminalAssigneeDisplay(group.epic).secondary" class="font-mono text-[10px] text-muted-foreground">{{ getTaskTerminalAssigneeDisplay(group.epic).secondary }}</span>
+                    </div>
                   </template>
 
                   <template v-else-if="col.id === 'createdAt'">
@@ -810,7 +834,11 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                     </template>
 
                     <template v-else-if="col.id === 'assignee'">
-                      <span class="text-xs">{{ child.assignee || '-' }}</span>
+                      <div class="flex items-center gap-1.5 text-xs" :title="getTaskTerminalAssigneeDisplay(child).title">
+                        <SquareTerminal v-if="isExternalCmuxTerminal(child)" class="h-3 w-3 text-emerald-500" />
+                        <span>{{ getTaskTerminalAssigneeDisplay(child).primary }}</span>
+                        <span v-if="getTaskTerminalAssigneeDisplay(child).secondary" class="font-mono text-[10px] text-muted-foreground">{{ getTaskTerminalAssigneeDisplay(child).secondary }}</span>
+                      </div>
                     </template>
 
                     <template v-else-if="col.id === 'createdAt'">
@@ -957,7 +985,11 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                   </template>
 
                   <template v-else-if="col.id === 'assignee'">
-                    <span class="text-xs">{{ issue.assignee || '-' }}</span>
+                    <div class="flex items-center gap-1.5 text-xs" :title="getTaskTerminalAssigneeDisplay(issue).title">
+                      <SquareTerminal v-if="isExternalCmuxTerminal(issue)" class="h-3 w-3 text-emerald-500" />
+                      <span>{{ getTaskTerminalAssigneeDisplay(issue).primary }}</span>
+                      <span v-if="getTaskTerminalAssigneeDisplay(issue).secondary" class="font-mono text-[10px] text-muted-foreground">{{ getTaskTerminalAssigneeDisplay(issue).secondary }}</span>
+                    </div>
                   </template>
 
                   <template v-else-if="col.id === 'createdAt'">
@@ -1105,7 +1137,11 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
               </template>
 
               <template v-else-if="col.id === 'assignee'">
-                <span class="text-xs">{{ issue.assignee || '-' }}</span>
+                <div class="flex items-center gap-1.5 text-xs" :title="getTaskTerminalAssigneeDisplay(issue).title">
+                  <SquareTerminal v-if="isExternalCmuxTerminal(issue)" class="h-3 w-3 text-emerald-500" />
+                  <span>{{ getTaskTerminalAssigneeDisplay(issue).primary }}</span>
+                  <span v-if="getTaskTerminalAssigneeDisplay(issue).secondary" class="font-mono text-[10px] text-muted-foreground">{{ getTaskTerminalAssigneeDisplay(issue).secondary }}</span>
+                </div>
               </template>
 
               <template v-else-if="col.id === 'createdAt'">

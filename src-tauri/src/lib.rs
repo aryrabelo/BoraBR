@@ -440,6 +440,18 @@ pub struct AgentProcessStatusResponse {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct CmuxFocusSurfaceRequest {
+    pub surface: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CmuxFocusSurfaceResponse {
+    pub surface: String,
+    pub command: String,
+    pub stdout: String,
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -498,6 +510,47 @@ where
         session_id: request.session_id,
         status: status.to_string(),
     }
+}
+
+fn validate_cmux_surface_id(surface: &str) -> Result<(), String> {
+    let value = surface.trim();
+    if value.is_empty() {
+        return Err("cmux surface id is required".to_string());
+    }
+    if value.len() > 128 {
+        return Err("cmux surface id is too long".to_string());
+    }
+    let valid = value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | ':' | '_'));
+    if !valid {
+        return Err("cmux surface id contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
+fn should_fallback_cmux_focus(stderr: &str) -> bool {
+    stderr.contains("Unknown command") || stderr.contains("focus-surface")
+}
+
+fn cmux_focus_surface_command(surface: &str) -> Vec<String> {
+    vec!["focus-surface".to_string(), "--surface".to_string(), surface.to_string()]
+}
+
+fn cmux_focus_surface_fallback_command(surface: &str) -> Vec<String> {
+    vec![
+        "move-surface".to_string(),
+        "--surface".to_string(),
+        surface.to_string(),
+        "--focus".to_string(),
+        "true".to_string(),
+    ]
+}
+
+fn run_cmux(args: &[String]) -> Result<std::process::Output, String> {
+    new_command("cmux")
+        .args(args)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to run cmux: {}", e))
 }
 
 fn probe_process_running(pid: u32) -> Option<bool> {
@@ -2861,6 +2914,45 @@ async fn agent_process_status(request: AgentProcessStatusRequest) -> Result<Agen
 }
 
 #[tauri::command]
+async fn cmux_focus_surface(request: CmuxFocusSurfaceRequest) -> Result<CmuxFocusSurfaceResponse, String> {
+    let surface = request.surface.trim().trim_start_matches('{').trim_end_matches('}').to_string();
+    validate_cmux_surface_id(&surface)?;
+
+    let focus_args = cmux_focus_surface_command(&surface);
+    match run_cmux(&focus_args) {
+        Ok(output) if output.status.success() => {
+            return Ok(CmuxFocusSurfaceResponse {
+                surface,
+                command: focus_args.join(" "),
+                stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            });
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if !should_fallback_cmux_focus(&stderr) {
+                return Err(format!("cmux {} failed: {}", focus_args.join(" "), stderr.trim()));
+            }
+        }
+        Err(error) => return Err(error),
+    }
+
+    let fallback_args = cmux_focus_surface_fallback_command(&surface);
+    match run_cmux(&fallback_args) {
+        Ok(output) if output.status.success() => Ok(CmuxFocusSurfaceResponse {
+            surface,
+            command: fallback_args.join(" "),
+            stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        }),
+        Ok(output) => Err(format!(
+            "cmux {} failed: {}",
+            fallback_args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        )),
+        Err(error) => Err(error),
+    }
+}
+
+#[tauri::command]
 async fn bd_close(id: String, options: CwdOptions) -> Result<serde_json::Value, String> {
     log_info!("[bd_close] Closing issue: {} with cwd: {:?}", id, options.cwd);
 
@@ -4924,6 +5016,7 @@ pub fn run() {
             patch_external_data,
             launch_probe,
             agent_process_status,
+            cmux_focus_surface,
             terminal::terminal_create,
             terminal::terminal_write,
             terminal::terminal_resize,
@@ -5004,6 +5097,36 @@ mod tests {
 
         assert_eq!(response.status, "running");
         assert_eq!(response.pid, Some(4242));
+    }
+
+    #[test]
+    fn cmux_surface_validation_accepts_uuid_and_refs() {
+        assert!(validate_cmux_surface_id("7DCCBE94-C09F-4E40-80D6-23FAEFD7D116").is_ok());
+        assert!(validate_cmux_surface_id("surface:139").is_ok());
+        assert!(validate_cmux_surface_id("pane_1").is_ok());
+    }
+
+    #[test]
+    fn cmux_surface_validation_rejects_shell_like_values() {
+        assert!(validate_cmux_surface_id("").is_err());
+        assert!(validate_cmux_surface_id("surface:1;rm").is_err());
+        assert!(validate_cmux_surface_id("surface 1").is_err());
+    }
+
+    #[test]
+    fn cmux_focus_uses_new_command_with_legacy_fallback() {
+        let surface = "7DCCBE94-C09F-4E40-80D6-23FAEFD7D116";
+
+        assert_eq!(
+            cmux_focus_surface_command(surface),
+            vec!["focus-surface", "--surface", surface],
+        );
+        assert_eq!(
+            cmux_focus_surface_fallback_command(surface),
+            vec!["move-surface", "--surface", surface, "--focus", "true"],
+        );
+        assert!(should_fallback_cmux_focus("Error: Unknown command: focus-surface"));
+        assert!(!should_fallback_cmux_focus("permission denied"));
     }
 
     #[test]

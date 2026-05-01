@@ -16,6 +16,12 @@ export interface AgentProcessStatusResponse {
   status: 'running' | 'not_running' | 'unknown'
 }
 
+export interface CmuxFocusSurfaceResponse {
+  surface: string
+  command: string
+  stdout: string
+}
+
 // Type declarations for Tauri detection
 declare global {
   interface Window {
@@ -73,6 +79,13 @@ export async function checkExternalHealth(url: string): Promise<boolean> {
     return ok
   }
   return false
+}
+
+export async function cmuxFocusSurface(surface: string): Promise<CmuxFocusSurfaceResponse> {
+  if (isTauri()) {
+    return invoke<CmuxFocusSurfaceResponse>('cmux_focus_surface', { request: { surface } })
+  }
+  throw new Error('cmux focus is only available in the desktop app')
 }
 
 async function postExternalData(url: string, body: string): Promise<string> {
