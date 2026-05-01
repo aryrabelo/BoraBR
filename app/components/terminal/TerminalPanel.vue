@@ -29,6 +29,7 @@ import {
 } from '~/utils/terminal-api'
 import { TERMINAL_PANEL_MAX_HEIGHT, TERMINAL_PANEL_MIN_HEIGHT, useTerminalPanel } from '~/composables/useTerminalPanel'
 import { resolveTerminalRenderer, type TerminalRendererTarget } from '~/utils/terminal-renderer'
+import { createTerminalEmulator, type TerminalEmulator } from '~/utils/terminal-emulator'
 import { buildTerminalHelperCommands, type TerminalHelperCommand } from '~/utils/terminal-helpers'
 import { resolveWorkflowContractState } from '~/utils/workflow-contracts'
 
@@ -56,6 +57,8 @@ const resizeStartHeight = ref(0)
 const uiMessage = ref('')
 let uiMessageTimer: ReturnType<typeof setTimeout> | null = null
 const unlisteners: UnlistenFn[] = []
+let activeEmulator: TerminalEmulator | null = null
+let terminalMountToken = 0
 
 const isInline = computed(() => props.mode === 'inline')
 const currentProjectName = computed(() => props.projectName || projectNameFromPath(props.projectPath))
@@ -105,6 +108,45 @@ function scrollToBottom() {
   })
 }
 
+function disposeActiveEmulator() {
+  terminalMountToken += 1
+  activeEmulator?.dispose()
+  activeEmulator = null
+}
+
+async function mountActiveEmulator() {
+  const token = ++terminalMountToken
+  const session = panel.activeSession.value
+
+  activeEmulator?.dispose()
+  activeEmulator = null
+
+  if (!session || renderer.value.active !== 'xterm' || !panel.isOpen.value) return
+
+  await nextTick()
+  if (token !== terminalMountToken || !outputRef.value) return
+
+  const emulator = createTerminalEmulator()
+  activeEmulator = emulator
+  await emulator.mount(outputRef.value)
+
+  if (token !== terminalMountToken) {
+    emulator.dispose()
+    return
+  }
+
+  if (session.buffer) emulator.write(session.buffer)
+  scrollToBottom()
+}
+
+function appendSessionOutput(sessionId: string, output: string) {
+  panel.appendOutput(sessionId, output)
+  if (panel.activeSessionId.value === sessionId) {
+    activeEmulator?.write(output)
+  }
+  scrollToBottom()
+}
+
 async function resizeActiveBackend() {
   const session = panel.activeSession.value
   if (!session?.backendSessionId || !isTerminalAvailable()) return
@@ -136,7 +178,7 @@ async function createSession() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     panel.markError(session.id, message)
-    panel.appendOutput(session.id, `${message}\n`)
+    appendSessionOutput(session.id, `${message}\n`)
   } finally {
     isCreatingSession.value = false
     scrollToBottom()
@@ -171,6 +213,7 @@ function clearActiveSession() {
   const session = panel.activeSession.value
   if (!session) return
   panel.clearSession(session.id)
+  activeEmulator?.clear()
 }
 
 async function restartActiveSession() {
@@ -203,7 +246,8 @@ async function submitCommand() {
 }
 
 async function copyOutput() {
-  const output = panel.activeSession.value?.buffer
+  const selection = activeEmulator?.getSelection()
+  const output = selection || panel.activeSession.value?.buffer
   if (!output) return
   try {
     await navigator.clipboard.writeText(output)
@@ -233,8 +277,7 @@ function stageHelperCommand(helper: TerminalHelperCommand) {
 function handleTerminalData(payload: TerminalEventPayload) {
   const session = sessionForBackend(payload.sessionId)
   if (!session || !payload.data) return
-  panel.appendOutput(session.id, payload.data)
-  scrollToBottom()
+  appendSessionOutput(session.id, payload.data)
 }
 
 function handleTerminalExit(payload: TerminalEventPayload) {
@@ -298,7 +341,16 @@ watch(() => props.projectPath, async (nextPath, previousPath) => {
 
 watch(panel.activeSessionId, () => {
   resizeActiveBackend()
+  mountActiveEmulator()
   scrollToBottom()
+})
+
+watch(panel.isOpen, (isOpen) => {
+  if (isOpen) {
+    mountActiveEmulator()
+  } else {
+    disposeActiveEmulator()
+  }
 })
 
 onMounted(async () => {
@@ -310,11 +362,13 @@ onMounted(async () => {
   if (props.autoStart && panel.sessions.value.length === 0) {
     await createSession()
   }
+  await mountActiveEmulator()
 })
 
 onUnmounted(() => {
   if (uiMessageTimer) clearTimeout(uiMessageTimer)
   for (const unlisten of unlisteners) unlisten()
+  disposeActiveEmulator()
   for (const session of panel.sessions.value) {
     if (session.backendSessionId && isTerminalAvailable()) {
       closeTerminal(session.backendSessionId).catch(() => {})
@@ -406,10 +460,10 @@ onUnmounted(() => {
         <span class="ml-auto shrink-0 capitalize">{{ panel.activeSession.value.status }}</span>
       </div>
 
-      <pre
+      <div
         ref="outputRef"
-        class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-5"
-      >{{ panel.activeSession.value.buffer }}</pre>
+        class="terminal-output min-h-0 flex-1 overflow-hidden"
+      />
 
       <div
         v-if="workflowState && workflowState.kind !== 'none' && workflowNextCommands.length > 0"
@@ -477,3 +531,19 @@ onUnmounted(() => {
     </Button>
   </div>
 </template>
+
+<style scoped>
+.terminal-output :deep(.xterm) {
+  height: 100%;
+  padding: 8px 12px;
+}
+
+.terminal-output :deep(.xterm-screen) {
+  min-height: 100%;
+}
+
+.terminal-output :deep(.xterm-viewport),
+.terminal-output :deep(.xterm-screen) {
+  background-color: transparent !important;
+}
+</style>

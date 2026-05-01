@@ -13,14 +13,14 @@ describe('resolveTerminalRenderer', () => {
     expect(renderer.fallbackReason).toBeNull()
   })
 
-  it('falls back with an explicit reason when libghostty is not available', () => {
+  it('falls back to a terminal emulator with an explicit reason when libghostty is not available', () => {
     const renderer = resolveTerminalRenderer({
       target: 'libghostty',
       capabilities: { libghostty: false },
     })
 
     expect(renderer.target).toBe('libghostty')
-    expect(renderer.active).toBe('dom-scrollback')
+    expect(renderer.active).toBe('xterm')
     expect(renderer.fallbackReason).toContain('libghostty')
   })
 })

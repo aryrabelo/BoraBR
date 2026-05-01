@@ -55,7 +55,7 @@ export default defineNuxtConfig({
     },
   },
 
-  css: ['~/assets/css/tailwind.css'],
+  css: ['~/assets/css/tailwind.css', '@xterm/xterm/css/xterm.css'],
 
   devtools: { enabled: false },
 })

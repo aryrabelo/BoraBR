@@ -17,9 +17,9 @@ This keeps the risky native-renderer work isolated from the core lifecycle work:
 
 ## Implementation Update
 
-`borabr-m0z.6` adds task-scoped terminal slots directly under issue rows. Those slots request the `libghostty` renderer target through a renderer adapter boundary and fall back to the DOM scrollback renderer when the native libghostty bridge is not present in the current build.
+`borabr-m0z.6` adds task-scoped terminal slots directly under issue rows. Those slots request the `libghostty` renderer target through a renderer adapter boundary.
 
-The fallback is intentionally explicit in code via `resolveTerminalRenderer`: the target remains `libghostty`, while the active renderer is `dom-scrollback` until a macOS native surface bridge can prove focus, input, resize, packaging, and signing. This keeps the task-terminal UX and PTY lifecycle shippable without hiding the fact that GPU rendering is still blocked on native integration work.
+`borabr-m0z.10` replaces the temporary DOM `<pre>` scrollback with an xterm.js terminal emulator fallback. The fallback is intentionally explicit in code via `resolveTerminalRenderer`: the target remains `libghostty`, while the active renderer is `xterm` until a macOS native surface bridge can prove focus, input, resize, packaging, and signing. This keeps the task-terminal UX and PTY lifecycle shippable without hiding the fact that GPU rendering is still blocked on native integration work, and avoids masking PTY output with search-and-replace sanitization.
 
 ## Current App Fit
 
@@ -107,7 +107,7 @@ Rules for BoraBR:
 3. Emit PTY output and lifecycle events through Tauri.
 4. Add a Vue composable such as `useTerminalSessions` for command calls, event listeners, and cleanup.
 5. Add the docked and task-inline panel UI using a `TerminalRenderer` adapter interface.
-6. Implement the first adapter with a DOM scrollback renderer, or `xterm.js` if terminal correctness becomes the immediate bottleneck before the native bridge lands.
+6. Implement the first adapter with xterm.js as the bounded terminal-emulator fallback while the libghostty native bridge is developed.
 7. Add a libghostty spike behind the primary adapter target, starting with macOS only.
 8. Promote libghostty to the active renderer once embedding, focus/input, packaging, and Beads dogfood workflows pass.
 

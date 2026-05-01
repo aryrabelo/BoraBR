@@ -1,5 +1,5 @@
-export type TerminalRendererTarget = 'libghostty' | 'dom-scrollback'
-export type TerminalRendererActive = 'libghostty' | 'dom-scrollback'
+export type TerminalRendererTarget = 'libghostty' | 'xterm'
+export type TerminalRendererActive = 'libghostty' | 'xterm'
 
 export interface TerminalRendererCapabilities {
   libghostty: boolean
@@ -20,10 +20,10 @@ export function resolveTerminalRenderer(input: ResolveTerminalRendererInput = {}
   const target = input.target ?? 'libghostty'
   const libghosttyAvailable = input.capabilities?.libghostty ?? false
 
-  if (target === 'dom-scrollback') {
+  if (target === 'xterm') {
     return {
       target,
-      active: 'dom-scrollback',
+      active: 'xterm',
       fallbackReason: null,
     }
   }
@@ -38,7 +38,7 @@ export function resolveTerminalRenderer(input: ResolveTerminalRendererInput = {}
 
   return {
     target: 'libghostty',
-    active: 'dom-scrollback',
-    fallbackReason: 'libghostty native renderer bridge is not available in this build',
+    active: 'xterm',
+    fallbackReason: 'libghostty native renderer bridge is not available in this build; using xterm terminal emulator',
   }
 }
