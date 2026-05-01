@@ -24,6 +24,7 @@ import CommentSection from '~/components/details/CommentSection.vue'
 
 // Issues components
 import IssueListPanel from '~/components/issues/IssueListPanel.vue'
+import TerminalPanel from '~/components/terminal/TerminalPanel.vue'
 
 // UI components
 import { Button } from '~/components/ui/button'
@@ -934,6 +935,12 @@ watch(
           <div v-if="isLoading" class="text-center text-muted-foreground py-4">
             Loading...
           </div>
+
+          <TerminalPanel
+            :project-path="beadsPath"
+            :project-name="currentProjectName"
+            :selected-issue="selectedIssue"
+          />
         </template>
       </main>
 
@@ -1152,6 +1159,13 @@ watch(
           @load-more="loadMore"
           @sort="setSort"
           @toggle-pin="togglePin"
+        />
+
+        <TerminalPanel
+          v-if="!showOnboarding"
+          :project-path="beadsPath"
+          :project-name="currentProjectName"
+          :selected-issue="selectedIssue"
         />
       </div>
 
