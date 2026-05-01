@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { Button } from '~/components/ui/button'
-import { Badge } from '~/components/ui/badge'
 import {
   Tooltip,
   TooltipContent,
@@ -11,9 +10,26 @@ import ConfirmDialog from '~/components/ui/confirm-dialog/ConfirmDialog.vue'
 import FolderPicker from './FolderPicker.vue'
 import Sortable from 'sortablejs'
 import { getFolderName } from '~/utils/path'
-import { listProbeProjects, registerOrExposeProject, patchProbeProject, probeUnregisterProject, getExternalUrl } from '~/utils/bd-api'
+import { ChevronRight, GitBranch } from 'lucide-vue-next'
+import {
+  discoverProjectWorktrees,
+  listProbeProjects,
+  registerOrExposeProject,
+  patchProbeProject,
+  probeUnregisterProject,
+  getExternalUrl,
+  type ProjectWorktree,
+} from '~/utils/bd-api'
 import type { ProbeProject } from '~/utils/probe-adapter'
 import { useKeyboardNavigation } from '~/composables/useKeyboardNavigation'
+import {
+  getProjectWorktreeBadges,
+  getProjectWorktreeDisplayName,
+  getProjectWorktreeShortPath,
+  getVisibleProjectWorktrees,
+  normalizePath,
+  type ProjectWorktreeBadgeTone,
+} from '~/utils/favorites-helpers'
 
 const props = defineProps<{
   isLoading?: boolean
@@ -24,6 +40,9 @@ const { projects, sortedProjects, sortMode, hasReordered, removeProject, reorder
 
 const projectsListRef = ref<HTMLElement | null>(null)
 let sortableInstance: Sortable | null = null
+const projectWorktrees = ref<Record<string, ProjectWorktree[]>>({})
+const loadingWorktreePaths = ref<Record<string, boolean>>({})
+const expandedProjectWorktreeGroups = useLocalStorage<Record<string, boolean>>('borabr:projects:worktree-groups', {})
 
 // Apply counter-zoom on projects list before SortableJS calculates coordinates
 const resetZoomOnPointerDown = (e: PointerEvent) => {
@@ -98,7 +117,56 @@ const { setFocused: setProjectFocused, handleKeydown: handleProjectKeydown, isFo
 
 const isProjectsCollapsed = useLocalStorage('beads:favoritesCollapsed', false)
 
-onMounted(initSortable)
+const visibleWorktreesForProject = (path: string) => getVisibleProjectWorktrees(projectWorktrees.value[path] ?? [])
+const isLoadingWorktrees = (path: string) => loadingWorktreePaths.value[path] === true
+const isProjectGroupExpanded = (path: string) => expandedProjectWorktreeGroups.value[path] !== false
+const isSelectedPath = (path: string) => normalizePath(beadsPath.value || '') === normalizePath(path)
+
+const worktreeBadgeClass: Record<ProjectWorktreeBadgeTone, string> = {
+  'github-open': 'border-violet-500/40 bg-violet-500/10 text-violet-600',
+  'github-merged': 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600',
+  recent: 'border-sky-500/40 bg-sky-500/10 text-sky-600',
+  limited: 'border-amber-500/40 bg-amber-500/10 text-amber-600',
+}
+
+const toggleProjectWorktreeGroup = (path: string) => {
+  expandedProjectWorktreeGroups.value = {
+    ...expandedProjectWorktreeGroups.value,
+    [path]: !isProjectGroupExpanded(path),
+  }
+}
+
+async function refreshProjectWorktreesForPath(path: string) {
+  if (loadingWorktreePaths.value[path]) return
+
+  loadingWorktreePaths.value = { ...loadingWorktreePaths.value, [path]: true }
+  try {
+    projectWorktrees.value = {
+      ...projectWorktrees.value,
+      [path]: await discoverProjectWorktrees(path),
+    }
+  } catch {
+    projectWorktrees.value = {
+      ...projectWorktrees.value,
+      [path]: [],
+    }
+  } finally {
+    const nextLoading = { ...loadingWorktreePaths.value }
+    delete nextLoading[path]
+    loadingWorktreePaths.value = nextLoading
+  }
+}
+
+async function refreshProjectWorktrees() {
+  for (const project of sortedProjects.value) {
+    await refreshProjectWorktreesForPath(project.path)
+  }
+}
+
+onMounted(() => {
+  initSortable()
+  refreshProjectWorktrees()
+})
 onBeforeUnmount(() => {
   projectsListRef.value?.removeEventListener('pointerdown', resetZoomOnPointerDown)
   projectsListRef.value?.removeEventListener('pointerup', restoreZoom)
@@ -153,6 +221,12 @@ const handleSelectProject = (path: string) => {
   // Don't allow switching while loading
   if (props.isLoading) return
   setPath(path)
+  emit('change')
+}
+
+const handleSelectWorktree = (worktree: ProjectWorktree) => {
+  if (props.isLoading) return
+  setPath(worktree.canonicalPath)
   emit('change')
 }
 
@@ -294,6 +368,13 @@ watch(probeEnabled, (active) => {
 watch(() => projects.value.length, () => {
   if (probeEnabled.value) refreshProbeProjects()
 })
+
+watch(
+  () => sortedProjects.value.map(project => project.path).join('|'),
+  () => {
+    refreshProjectWorktrees()
+  }
+)
 </script>
 
 <template>
@@ -394,13 +475,24 @@ watch(() => projects.value.length, () => {
           @click="setProjectFocused(proj.path)"
         >
           <Button
-            :variant="beadsPath === proj.path ? 'default' : 'ghost'"
+            :variant="isSelectedPath(proj.path) ? 'default' : 'ghost'"
             size="sm"
             class="h-7 justify-start text-xs gap-0 w-full pr-6"
-            :class="{ 'opacity-50 cursor-wait': isLoading && beadsPath !== proj.path }"
+            :class="{ 'opacity-50 cursor-wait': isLoading && !isSelectedPath(proj.path) }"
             :disabled="isLoading"
             @click="handleSelectProject(proj.path)"
           >
+            <span
+              v-if="visibleWorktreesForProject(proj.path).length > 0 || isLoadingWorktrees(proj.path)"
+              class="mr-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+              @click.stop.prevent="toggleProjectWorktreeGroup(proj.path)"
+            >
+              <ChevronRight
+                class="h-3 w-3 transition-transform"
+                :class="{ 'rotate-90': isProjectGroupExpanded(proj.path) }"
+              />
+            </span>
+            <span v-else class="mr-0.5 h-4 w-4 shrink-0" />
             <!-- Drag handle -->
             <span
               v-if="!isLoading"
@@ -460,6 +552,44 @@ watch(() => projects.value.length, () => {
             </svg>
             <span class="truncate flex-1 text-left">{{ proj.name }}</span>
           </Button>
+          <div
+            v-if="isProjectGroupExpanded(proj.path) && (visibleWorktreesForProject(proj.path).length > 0 || isLoadingWorktrees(proj.path))"
+            class="ml-5 mt-1 flex flex-col gap-1 border-l border-border/70 pl-2"
+          >
+            <div v-if="isLoadingWorktrees(proj.path)" class="h-6 px-2 text-[11px] text-muted-foreground flex items-center">
+              Carregando worktrees...
+            </div>
+            <Button
+              v-for="worktree in visibleWorktreesForProject(proj.path)"
+              :key="worktree.canonicalPath"
+              :variant="isSelectedPath(worktree.canonicalPath) ? 'secondary' : 'ghost'"
+              size="sm"
+              class="h-auto min-h-8 w-full justify-start gap-2 px-2 py-1 text-left"
+              :class="{ 'opacity-50 cursor-wait': isLoading && !isSelectedPath(worktree.canonicalPath) }"
+              :disabled="isLoading"
+              @click="handleSelectWorktree(worktree)"
+            >
+              <GitBranch class="h-3 w-3 shrink-0 text-muted-foreground" />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-[11px] leading-4">
+                  {{ getProjectWorktreeDisplayName(worktree) }}
+                </span>
+                <span class="block truncate text-[10px] leading-3 text-muted-foreground">
+                  {{ getProjectWorktreeShortPath(worktree) }}
+                </span>
+                <span v-if="getProjectWorktreeBadges(worktree).length > 0" class="mt-1 flex flex-wrap gap-1">
+                  <span
+                    v-for="badge in getProjectWorktreeBadges(worktree)"
+                    :key="`${worktree.canonicalPath}:${badge.label}`"
+                    class="inline-flex rounded-sm border px-1 py-0 text-[9px] leading-3"
+                    :class="worktreeBadgeClass[badge.tone]"
+                  >
+                    {{ badge.label }}
+                  </span>
+                </span>
+              </span>
+            </Button>
+          </div>
           <!-- Remove button - outside Button to avoid click capture -->
           <button
             v-if="!isLoading"

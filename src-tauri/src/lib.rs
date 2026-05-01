@@ -48,6 +48,8 @@ enum CliClient {
 
 static CLI_CLIENT_INFO: LazyLock<Mutex<Option<(CliClient, u32, u32, u32)>>> =
     LazyLock::new(|| Mutex::new(None));
+static GITHUB_PR_SIGNAL_CACHE: LazyLock<Mutex<HashMap<String, GitHubPullRequestCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 // Conditional logging macros
 macro_rules! log_info {
@@ -117,6 +119,35 @@ struct GitHubRelease {
     assets: Vec<GitHubAsset>,
     #[serde(default)]
     body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ProjectWorktreePullRequest {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    #[serde(rename = "mergedAt")]
+    pub merged_at: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubPullRequest {
+    number: u64,
+    title: String,
+    #[serde(rename = "html_url")]
+    url: String,
+    state: String,
+    merged_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct GitHubPullRequestCacheEntry {
+    fetched_at: Instant,
+    pull_request: Option<ProjectWorktreePullRequest>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -374,6 +405,10 @@ pub struct ProjectWorktree {
     pub activity_scan_limited: bool,
     #[serde(rename = "recentActivityRank")]
     pub recent_activity_rank: Option<usize>,
+    #[serde(rename = "pullRequest")]
+    pub pull_request: Option<ProjectWorktreePullRequest>,
+    #[serde(rename = "prPromoted")]
+    pub pr_promoted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -398,6 +433,8 @@ struct ProjectWorktreeCandidate {
     last_activity_source: Option<String>,
     activity_scan_limited: bool,
     recent_activity_rank: Option<usize>,
+    pull_request: Option<ProjectWorktreePullRequest>,
+    pr_promoted: bool,
 }
 
 // ============================================================================
@@ -3810,6 +3847,9 @@ fn git_head(cwd: &std::path::Path) -> Option<String> {
 const WORKTREE_ACTIVITY_SCAN_MAX_ENTRIES: usize = 5_000;
 const WORKTREE_ACTIVITY_SCAN_MAX_MS: u64 = 150;
 const RECENT_ACTIVITY_WORKTREE_LIMIT: usize = 5;
+const GITHUB_PR_SIGNAL_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const GITHUB_PR_SIGNAL_MAX_BRANCHES_PER_DISCOVERY: usize = 20;
+const GITHUB_RECENT_MERGED_WINDOW_MS: u64 = 14 * 24 * 60 * 60 * 1_000;
 
 fn system_time_epoch_millis(time: std::time::SystemTime) -> Option<u64> {
     time.duration_since(std::time::UNIX_EPOCH)
@@ -3931,6 +3971,188 @@ fn resolve_worktree_activity(path: &std::path::Path) -> (Option<u64>, Option<Str
     )
 }
 
+fn parse_decimal_i32(value: &str) -> Option<i32> {
+    value.parse::<i32>().ok()
+}
+
+fn parse_decimal_u32(value: &str) -> Option<u32> {
+    value.parse::<u32>().ok()
+}
+
+fn days_from_civil(mut year: i32, month: u32, day: u32) -> Option<i64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    year -= i32::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let yoe = year - era * 400;
+    let month_prime = month as i32 + if month > 2 { -3 } else { 9 };
+    let doy = (153 * month_prime + 2) / 5 + day as i32 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some((era * 146_097 + doe - 719_468) as i64)
+}
+
+fn parse_github_timestamp_millis(value: &str) -> Option<u64> {
+    let value = value.trim();
+    if value.len() < 20 || !value.ends_with('Z') {
+        return None;
+    }
+
+    let year = parse_decimal_i32(value.get(0..4)?)?;
+    let month = parse_decimal_u32(value.get(5..7)?)?;
+    let day = parse_decimal_u32(value.get(8..10)?)?;
+    let hour = parse_decimal_u32(value.get(11..13)?)?;
+    let minute = parse_decimal_u32(value.get(14..16)?)?;
+    let second = parse_decimal_u32(value.get(17..19)?)?;
+
+    if value.get(4..5)? != "-"
+        || value.get(7..8)? != "-"
+        || value.get(10..11)? != "T"
+        || value.get(13..14)? != ":"
+        || value.get(16..17)? != ":"
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+
+    let days = days_from_civil(year, month, day)?;
+    if days < 0 {
+        return None;
+    }
+
+    let seconds = days as u64 * 86_400 + hour as u64 * 3_600 + minute as u64 * 60 + second as u64;
+    seconds.checked_mul(1_000)
+}
+
+fn current_epoch_millis() -> Option<u64> {
+    system_time_epoch_millis(std::time::SystemTime::now())
+}
+
+fn is_recent_github_merged_at(merged_at: &str, now_millis: u64) -> bool {
+    let Some(merged_millis) = parse_github_timestamp_millis(merged_at) else {
+        return false;
+    };
+    let cutoff = now_millis.saturating_sub(GITHUB_RECENT_MERGED_WINDOW_MS);
+    merged_millis >= cutoff && merged_millis <= now_millis.saturating_add(60_000)
+}
+
+fn pull_request_signal_from_github_pr(
+    pr: &GitHubPullRequest,
+    now_millis: u64,
+) -> Option<ProjectWorktreePullRequest> {
+    if pr.state == "open" {
+        return Some(ProjectWorktreePullRequest {
+            number: pr.number,
+            title: pr.title.clone(),
+            url: pr.url.clone(),
+            state: "open".to_string(),
+            merged_at: pr.merged_at.clone(),
+            updated_at: pr.updated_at.clone(),
+        });
+    }
+
+    if let Some(merged_at) = &pr.merged_at {
+        if is_recent_github_merged_at(merged_at, now_millis) {
+            return Some(ProjectWorktreePullRequest {
+                number: pr.number,
+                title: pr.title.clone(),
+                url: pr.url.clone(),
+                state: "merged".to_string(),
+                merged_at: pr.merged_at.clone(),
+                updated_at: pr.updated_at.clone(),
+            });
+        }
+    }
+
+    None
+}
+
+fn select_project_worktree_pull_request(
+    pull_requests: &[GitHubPullRequest],
+    now_millis: u64,
+) -> Option<ProjectWorktreePullRequest> {
+    pull_requests
+        .iter()
+        .find_map(|pr| {
+            if pr.state == "open" {
+                pull_request_signal_from_github_pr(pr, now_millis)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            pull_requests
+                .iter()
+                .find_map(|pr| pull_request_signal_from_github_pr(pr, now_millis))
+        })
+}
+
+async fn fetch_github_pull_request_signal(
+    owner: &str,
+    repo: &str,
+    branch: &str,
+) -> Result<Option<ProjectWorktreePullRequest>, String> {
+    let client = github_client()?;
+    let url = format!("https://api.github.com/repos/{}/{}/pulls", owner, repo);
+    let head = format!("{}:{}", owner, branch);
+    let response = with_github_auth(client.get(url))
+        .query(&[
+            ("state", "all"),
+            ("head", head.as_str()),
+            ("sort", "updated"),
+            ("direction", "desc"),
+            ("per_page", "10"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("GitHub PR request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub PR request returned status: {}", response.status()));
+    }
+
+    let pull_requests: Vec<GitHubPullRequest> = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse GitHub PR response: {}", e))?;
+    Ok(select_project_worktree_pull_request(
+        &pull_requests,
+        current_epoch_millis().unwrap_or(u64::MAX),
+    ))
+}
+
+async fn cached_github_pull_request_signal(
+    owner: &str,
+    repo: &str,
+    branch: &str,
+) -> Result<Option<ProjectWorktreePullRequest>, String> {
+    let cache_key = format!("{}/{}/{}", owner.to_lowercase(), repo.to_lowercase(), branch);
+    if let Some(entry) = GITHUB_PR_SIGNAL_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&cache_key).cloned())
+    {
+        if entry.fetched_at.elapsed() <= GITHUB_PR_SIGNAL_CACHE_TTL {
+            return Ok(entry.pull_request);
+        }
+    }
+
+    let pull_request = fetch_github_pull_request_signal(owner, repo, branch).await?;
+    if let Ok(mut cache) = GITHUB_PR_SIGNAL_CACHE.lock() {
+        cache.insert(
+            cache_key,
+            GitHubPullRequestCacheEntry {
+                fetched_at: Instant::now(),
+                pull_request: pull_request.clone(),
+            },
+        );
+    }
+    Ok(pull_request)
+}
+
 fn candidate_from_path(
     root_path: &str,
     path: &std::path::Path,
@@ -3958,6 +4180,8 @@ fn candidate_from_path(
         last_activity_source: None,
         activity_scan_limited: false,
         recent_activity_rank: None,
+        pull_request: None,
+        pr_promoted: false,
     })
 }
 
@@ -4038,6 +4262,46 @@ fn apply_worktree_activity(candidates: &mut [ProjectWorktreeCandidate]) {
     }
 }
 
+async fn apply_github_pull_request_signals(
+    candidates: &mut [ProjectWorktreeCandidate],
+    root_remote: Option<&str>,
+) {
+    let Some(remote) = root_remote else {
+        return;
+    };
+    let Some((owner, repo)) = github_owner_repo_from_remote(remote) else {
+        return;
+    };
+
+    let mut checked_branches = 0usize;
+    for candidate in candidates.iter_mut().filter(|candidate| !candidate.is_root) {
+        candidate.pull_request = None;
+        candidate.pr_promoted = false;
+
+        let Some(branch) = candidate.branch.as_deref() else {
+            continue;
+        };
+        if branch.trim().is_empty() {
+            continue;
+        }
+        if checked_branches >= GITHUB_PR_SIGNAL_MAX_BRANCHES_PER_DISCOVERY {
+            break;
+        }
+        checked_branches += 1;
+
+        match cached_github_pull_request_signal(&owner, &repo, branch).await {
+            Ok(Some(pull_request)) => {
+                candidate.pull_request = Some(pull_request);
+                candidate.pr_promoted = true;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                log_warn!("[worktrees] GitHub PR signal unavailable for {}: {}", branch, error);
+            }
+        }
+    }
+}
+
 fn assign_recent_activity_ranks(
     candidates: &mut [ProjectWorktreeCandidate],
     limit: usize,
@@ -4081,6 +4345,8 @@ impl From<ProjectWorktreeCandidate> for ProjectWorktree {
             last_activity_source: candidate.last_activity_source,
             activity_scan_limited: candidate.activity_scan_limited,
             recent_activity_rank: candidate.recent_activity_rank,
+            pull_request: candidate.pull_request,
+            pr_promoted: candidate.pr_promoted,
         }
     }
 }
@@ -4124,10 +4390,16 @@ async fn discover_project_worktrees(project_path: String) -> Result<Vec<ProjectW
 
     let mut candidates = dedupe_project_worktree_candidates(candidates);
     apply_worktree_activity(&mut candidates);
+    apply_github_pull_request_signals(&mut candidates, root_remote.as_deref()).await;
+    let promoted_canonical_paths: HashSet<String> = candidates
+        .iter()
+        .filter(|candidate| candidate.pr_promoted)
+        .map(|candidate| candidate.canonical_path.clone())
+        .collect();
     assign_recent_activity_ranks(
         &mut candidates,
         RECENT_ACTIVITY_WORKTREE_LIMIT,
-        &HashSet::new(),
+        &promoted_canonical_paths,
     );
 
     Ok(candidates.into_iter().map(ProjectWorktree::from).collect())
@@ -6270,6 +6542,67 @@ prunable gitdir file points to non-existent location
     }
 
     #[test]
+    fn github_pull_request_signal_prefers_open_prs() {
+        fn pr(number: u64, state: &str, merged_at: Option<&str>) -> GitHubPullRequest {
+            GitHubPullRequest {
+                number,
+                title: format!("PR {number}"),
+                url: format!("https://github.com/entrc/entrc-backend/pull/{number}"),
+                state: state.to_string(),
+                merged_at: merged_at.map(String::from),
+                updated_at: Some("2026-05-01T12:00:00Z".to_string()),
+            }
+        }
+
+        let now = parse_github_timestamp_millis("2026-05-01T12:00:00Z").unwrap();
+        let signal = select_project_worktree_pull_request(
+            &[
+                pr(10, "closed", Some("2026-04-30T12:00:00Z")),
+                pr(11, "open", None),
+            ],
+            now,
+        )
+        .unwrap();
+
+        assert_eq!(signal.number, 11);
+        assert_eq!(signal.state, "open");
+    }
+
+    #[test]
+    fn github_pull_request_signal_accepts_recent_merged_prs() {
+        let now = parse_github_timestamp_millis("2026-05-01T12:00:00Z").unwrap();
+        let pull_requests = vec![GitHubPullRequest {
+            number: 12,
+            title: "Recent merge".to_string(),
+            url: "https://github.com/entrc/entrc-backend/pull/12".to_string(),
+            state: "closed".to_string(),
+            merged_at: Some("2026-04-25T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-25T12:00:00Z".to_string()),
+        }];
+
+        let signal = select_project_worktree_pull_request(&pull_requests, now).unwrap();
+
+        assert_eq!(signal.number, 12);
+        assert_eq!(signal.state, "merged");
+        assert_eq!(signal.merged_at.as_deref(), Some("2026-04-25T12:00:00Z"));
+    }
+
+    #[test]
+    fn github_pull_request_signal_rejects_old_merged_prs() {
+        let now = parse_github_timestamp_millis("2026-05-01T12:00:00Z").unwrap();
+        let pull_requests = vec![GitHubPullRequest {
+            number: 13,
+            title: "Old merge".to_string(),
+            url: "https://github.com/entrc/entrc-backend/pull/13".to_string(),
+            state: "closed".to_string(),
+            merged_at: Some("2026-04-01T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-01T12:00:00Z".to_string()),
+        }];
+
+        assert_eq!(select_project_worktree_pull_request(&pull_requests, now), None);
+    }
+
+    #[test]
     fn dedupe_project_worktrees_by_canonical_path_and_repo_branch() {
         fn candidate(path: &str, branch: Option<&str>, reason: &str) -> ProjectWorktreeCandidate {
             ProjectWorktreeCandidate {
@@ -6285,6 +6618,8 @@ prunable gitdir file points to non-existent location
                 last_activity_source: None,
                 activity_scan_limited: false,
                 recent_activity_rank: None,
+                pull_request: None,
+                pr_promoted: false,
             }
         }
 
@@ -6359,6 +6694,8 @@ prunable gitdir file points to non-existent location
                 last_activity_source: last_activity_at.map(|_| "file-mtime".to_string()),
                 activity_scan_limited: false,
                 recent_activity_rank: None,
+                pull_request: None,
+                pr_promoted: false,
             }
         }
 

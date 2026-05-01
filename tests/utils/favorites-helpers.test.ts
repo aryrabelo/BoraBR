@@ -5,14 +5,39 @@ import {
   sortFavorites,
   isFavorite,
   createFavoriteEntry,
+  getProjectWorktreeBadges,
+  getProjectWorktreeDisplayName,
+  getProjectWorktreeShortPath,
+  getVisibleProjectWorktrees,
   type Favorite,
 } from '~/utils/favorites-helpers'
+import type { ProjectWorktree } from '~/utils/bd-api'
 
 function makeFav(overrides: Partial<Favorite> = {}): Favorite {
   return {
     path: '/home/dev/project',
     name: 'project',
     addedAt: '2025-01-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+function makeWorktree(overrides: Partial<ProjectWorktree> = {}): ProjectWorktree {
+  return {
+    rootPath: '/repos/app',
+    worktreePath: '/worktrees/github.com/acme/app/feature-a',
+    canonicalPath: '/worktrees/github.com/acme/app/feature-a',
+    branch: 'feature-a',
+    head: 'abc123',
+    repoRemote: 'git@github.com:acme/app.git',
+    isRoot: false,
+    inclusionReason: 'git-worktree-list',
+    lastActivityAt: 1_000,
+    lastActivitySource: 'file-mtime',
+    activityScanLimited: false,
+    recentActivityRank: null,
+    pullRequest: null,
+    prPromoted: false,
     ...overrides,
   }
 }
@@ -159,5 +184,66 @@ describe('createFavoriteEntry', () => {
     const entry = createFavoriteEntry('/some/path')
     expect(() => new Date(entry.addedAt)).not.toThrow()
     expect(new Date(entry.addedAt).getFullYear()).toBeGreaterThanOrEqual(2025)
+  })
+})
+
+describe('project worktree helpers', () => {
+  it('uses branch as display name with path fallback', () => {
+    expect(getProjectWorktreeDisplayName(makeWorktree({ branch: 'feature/sidebar' }))).toBe('feature/sidebar')
+    expect(getProjectWorktreeDisplayName(makeWorktree({ branch: null }))).toBe('feature-a')
+  })
+
+  it('shortens long worktree paths', () => {
+    expect(getProjectWorktreeShortPath(makeWorktree())).toBe('.../acme/app/feature-a')
+  })
+
+  it('returns PR-promoted worktrees before recent-only worktrees', () => {
+    const visible = getVisibleProjectWorktrees([
+      makeWorktree({ canonicalPath: '/repos/app', isRoot: true, recentActivityRank: 1 }),
+      makeWorktree({ canonicalPath: '/worktrees/recent', branch: 'recent', recentActivityRank: 1 }),
+      makeWorktree({
+        canonicalPath: '/worktrees/open-pr',
+        branch: 'open-pr',
+        prPromoted: true,
+        pullRequest: {
+          number: 42,
+          title: 'Open PR',
+          url: 'https://github.com/acme/app/pull/42',
+          state: 'open',
+        },
+      }),
+      makeWorktree({ canonicalPath: '/worktrees/hidden', branch: 'hidden' }),
+    ])
+
+    expect(visible.map(worktree => worktree.branch)).toEqual(['open-pr', 'recent'])
+  })
+
+  it('builds badges for open PR, merged PR and recent activity', () => {
+    expect(getProjectWorktreeBadges(makeWorktree({
+      prPromoted: true,
+      pullRequest: {
+        number: 42,
+        title: 'Open PR',
+        url: 'https://github.com/acme/app/pull/42',
+        state: 'open',
+      },
+    }))).toContainEqual({ label: 'PR #42 open', tone: 'github-open' })
+
+    const mergedBadges = getProjectWorktreeBadges(makeWorktree({
+      prPromoted: true,
+      pullRequest: {
+        number: 43,
+        title: 'Merged PR',
+        url: 'https://github.com/acme/app/pull/43',
+        state: 'merged',
+        mergedAt: '2026-04-30T12:00:00Z',
+      },
+    }))
+    expect(mergedBadges[0]?.label).toContain('PR #43 merged')
+
+    expect(getProjectWorktreeBadges(makeWorktree({ recentActivityRank: 3 }))).toContainEqual({
+      label: 'recent #3',
+      tone: 'recent',
+    })
   })
 })

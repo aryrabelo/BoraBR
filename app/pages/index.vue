@@ -46,6 +46,7 @@ import {
 import { Bell, ArrowLeft, Copy, SquareTerminal } from 'lucide-vue-next'
 import { cmuxFocusSurface, cmuxSendPrompt } from '~/utils/bd-api'
 import { resolveTaskTerminalSource } from '~/utils/task-terminal-source'
+import { getFolderName } from '~/utils/path'
 import {
   buildActionCenterIssuePrompt,
   buildActionCenterProjectActionState,
@@ -122,7 +123,7 @@ watch(probeEnabled, async (enabled) => {
 // Current project name for header subtitle
 const currentProjectName = computed(() => {
   const project = projects.value.find(f => f.path === beadsPath.value)
-  return project?.name
+  return project?.name ?? getFolderName(beadsPath.value)
 })
 
 // Update window title with current project name (for Windows task switchers)

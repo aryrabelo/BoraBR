@@ -28,6 +28,15 @@ export interface CmuxSendPromptResponse {
   stdout: string
 }
 
+export interface ProjectWorktreePullRequest {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'merged' | string
+  mergedAt?: string | null
+  updatedAt?: string | null
+}
+
 export interface ProjectWorktree {
   rootPath: string
   worktreePath: string
@@ -41,6 +50,8 @@ export interface ProjectWorktree {
   lastActivitySource?: 'file-mtime' | 'git-head' | 'git-metadata' | string | null
   activityScanLimited: boolean
   recentActivityRank?: number | null
+  pullRequest?: ProjectWorktreePullRequest | null
+  prPromoted: boolean
 }
 
 // Type declarations for Tauri detection
