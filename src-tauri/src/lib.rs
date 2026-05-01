@@ -452,6 +452,43 @@ pub struct CmuxFocusSurfaceResponse {
     pub stdout: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TerminalNativeRendererCapabilitiesResponse {
+    pub libghostty: bool,
+    #[serde(rename = "ghosttyExternal")]
+    pub ghostty_external: GhosttyExternalBridgeCapability,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GhosttyExternalBridgeCapability {
+    pub available: bool,
+    pub command: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenNativeTerminalRendererRequest {
+    pub cwd: String,
+    #[serde(rename = "issueId")]
+    pub issue_id: Option<String>,
+    pub shell: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenNativeTerminalRendererResponse {
+    pub renderer: String,
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    pub command: String,
+    pub pid: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NativeTerminalLaunchPlan {
+    program: String,
+    args: Vec<String>,
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -551,6 +588,177 @@ fn run_cmux(args: &[String]) -> Result<std::process::Output, String> {
         .env("PATH", get_extended_path())
         .output()
         .map_err(|e| format!("Failed to run cmux: {}", e))
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn native_terminal_shell_script(
+    cwd: &str,
+    issue_id: Option<&str>,
+    shell: &str,
+    session_id: &str,
+) -> String {
+    let mut lines = vec![
+        format!("cd {} || exit", shell_single_quote(cwd)),
+        format!("export BEADS_PATH={}", shell_single_quote(cwd)),
+        format!(
+            "export BORABR_TERMINAL_SESSION_ID={}",
+            shell_single_quote(session_id)
+        ),
+    ];
+    if let Some(issue_id) = issue_id {
+        lines.push(format!(
+            "export BORABR_ISSUE_ID={}",
+            shell_single_quote(issue_id)
+        ));
+    }
+    lines.push(format!("exec {} -l", shell_single_quote(shell)));
+    lines.join("\n")
+}
+
+fn build_native_terminal_launch_plan(
+    platform: &str,
+    macos_app_path: Option<String>,
+    cwd: &str,
+    issue_id: Option<&str>,
+    shell: &str,
+    session_id: &str,
+) -> Result<NativeTerminalLaunchPlan, String> {
+    let script = native_terminal_shell_script(cwd, issue_id, shell, session_id);
+
+    if platform == "macos" {
+        let app_path = macos_app_path
+            .ok_or_else(|| "Ghostty.app is required to launch a native renderer on macOS".to_string())?;
+        return Ok(NativeTerminalLaunchPlan {
+            program: "open".to_string(),
+            args: vec![
+                "-n".to_string(),
+                app_path,
+                "--args".to_string(),
+                "-e".to_string(),
+                shell.to_string(),
+                "-lc".to_string(),
+                script,
+            ],
+        });
+    }
+
+    Ok(NativeTerminalLaunchPlan {
+        program: "ghostty".to_string(),
+        args: vec![
+            "-e".to_string(),
+            shell.to_string(),
+            "-lc".to_string(),
+            script,
+        ],
+    })
+}
+
+fn default_native_shell() -> String {
+    if cfg!(target_os = "windows") {
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+    }
+}
+
+fn native_terminal_session_id() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("native-term-{}", millis)
+}
+
+fn find_ghostty_app() -> Option<String> {
+    if let Ok(path) = env::var("BORABR_GHOSTTY_APP_PATH") {
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+
+    let mut candidates = vec![PathBuf::from("/Applications/Ghostty.app")];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join("Applications/Ghostty.app"));
+    }
+
+    candidates
+        .into_iter()
+        .find(|path| path.exists())
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+fn ghostty_cli_available() -> Result<String, String> {
+    let output = new_command("ghostty")
+        .arg("+version")
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Ghostty CLI not found: {}", e))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn detect_native_terminal_renderer_capabilities() -> TerminalNativeRendererCapabilitiesResponse {
+    let ghostty_cli = ghostty_cli_available();
+    let ghostty_external = if cfg!(target_os = "macos") {
+        match (find_ghostty_app(), ghostty_cli) {
+            (Some(_), _) => GhosttyExternalBridgeCapability {
+                available: true,
+                command: Some("open".to_string()),
+                reason: None,
+            },
+            (None, Ok(version)) => GhosttyExternalBridgeCapability {
+                available: false,
+                command: Some("ghostty".to_string()),
+                reason: Some(format!(
+                    "{} is on PATH, but macOS Ghostty renderer launch requires Ghostty.app",
+                    version.lines().next().unwrap_or("Ghostty")
+                )),
+            },
+            (None, Err(error)) => GhosttyExternalBridgeCapability {
+                available: false,
+                command: None,
+                reason: Some(error),
+            },
+        }
+    } else {
+        match ghostty_cli {
+            Ok(_) => GhosttyExternalBridgeCapability {
+                available: true,
+                command: Some("ghostty".to_string()),
+                reason: None,
+            },
+            Err(error) => GhosttyExternalBridgeCapability {
+                available: false,
+                command: None,
+                reason: Some(error),
+            },
+        }
+    };
+
+    TerminalNativeRendererCapabilitiesResponse {
+        libghostty: false,
+        ghostty_external,
+    }
+}
+
+fn validate_native_terminal_cwd(cwd: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(cwd);
+    if !path.exists() {
+        return Err(format!("Native terminal cwd does not exist: {}", cwd));
+    }
+    if !path.is_dir() {
+        return Err(format!("Native terminal cwd is not a directory: {}", cwd));
+    }
+    path.canonicalize()
+        .map_err(|e| format!("Failed to resolve native terminal cwd {}: {}", cwd, e))
 }
 
 fn probe_process_running(pid: u32) -> Option<bool> {
@@ -2953,6 +3161,52 @@ async fn cmux_focus_surface(request: CmuxFocusSurfaceRequest) -> Result<CmuxFocu
 }
 
 #[tauri::command]
+async fn terminal_native_renderer_capabilities() -> Result<TerminalNativeRendererCapabilitiesResponse, String> {
+    Ok(detect_native_terminal_renderer_capabilities())
+}
+
+#[tauri::command]
+async fn terminal_open_native_renderer(
+    request: OpenNativeTerminalRendererRequest,
+) -> Result<OpenNativeTerminalRendererResponse, String> {
+    let cwd = validate_native_terminal_cwd(&request.cwd)?;
+    let cwd = cwd.to_string_lossy().to_string();
+    let shell = request.shell.unwrap_or_else(default_native_shell);
+    let session_id = native_terminal_session_id();
+    let app_path = if cfg!(target_os = "macos") {
+        find_ghostty_app()
+    } else {
+        None
+    };
+    let plan = build_native_terminal_launch_plan(
+        std::env::consts::OS,
+        app_path,
+        &cwd,
+        request.issue_id.as_deref(),
+        &shell,
+        &session_id,
+    )?;
+
+    let command_summary = format!("{} {}", plan.program, plan.args.join(" "));
+    let mut child = new_command(&plan.program)
+        .args(&plan.args)
+        .env("PATH", get_extended_path())
+        .spawn()
+        .map_err(|e| format!("Failed to launch Ghostty native renderer: {}", e))?;
+    let pid = child.id();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+
+    Ok(OpenNativeTerminalRendererResponse {
+        renderer: "ghostty-external".to_string(),
+        session_id,
+        command: command_summary,
+        pid: Some(pid),
+    })
+}
+
+#[tauri::command]
 async fn bd_close(id: String, options: CwdOptions) -> Result<serde_json::Value, String> {
     log_info!("[bd_close] Closing issue: {} with cwd: {:?}", id, options.cwd);
 
@@ -5017,6 +5271,8 @@ pub fn run() {
             launch_probe,
             agent_process_status,
             cmux_focus_surface,
+            terminal_native_renderer_capabilities,
+            terminal_open_native_renderer,
             terminal::terminal_create,
             terminal::terminal_write,
             terminal::terminal_resize,
@@ -5127,6 +5383,59 @@ mod tests {
         );
         assert!(should_fallback_cmux_focus("Error: Unknown command: focus-surface"));
         assert!(!should_fallback_cmux_focus("permission denied"));
+    }
+
+    #[test]
+    fn native_ghostty_launch_plan_uses_safe_shell_context() {
+        let plan = build_native_terminal_launch_plan(
+            "macos",
+            Some("/Applications/Ghostty.app".into()),
+            "/tmp/project with space",
+            Some("borabr-m0z.13"),
+            "/bin/zsh",
+            "native-term-1",
+        )
+        .unwrap();
+
+        assert_eq!(plan.program, "open");
+        assert_eq!(
+            plan.args,
+            vec![
+                "-n",
+                "/Applications/Ghostty.app",
+                "--args",
+                "-e",
+                "/bin/zsh",
+                "-lc",
+                "cd '/tmp/project with space' || exit\nexport BEADS_PATH='/tmp/project with space'\nexport BORABR_TERMINAL_SESSION_ID='native-term-1'\nexport BORABR_ISSUE_ID='borabr-m0z.13'\nexec '/bin/zsh' -l",
+            ]
+        );
+    }
+
+    #[test]
+    fn native_ghostty_launch_plan_escapes_shell_values() {
+        let plan = build_native_terminal_launch_plan(
+            "linux",
+            None,
+            "/tmp/project's dir",
+            Some("issue'one"),
+            "/bin/zsh",
+            "native-term-2",
+        )
+        .unwrap();
+
+        assert_eq!(plan.program, "ghostty");
+        assert_eq!(plan.args[0], "-e");
+        assert!(
+            plan.args[3].contains("cd '/tmp/project'\"'\"'s dir' || exit"),
+            "expected shell-escaped cwd, got {:?}",
+            plan.args[3]
+        );
+        assert!(
+            plan.args[3].contains("export BORABR_ISSUE_ID='issue'\"'\"'one'"),
+            "expected shell-escaped issue id, got {:?}",
+            plan.args[3]
+        );
     }
 
     #[test]

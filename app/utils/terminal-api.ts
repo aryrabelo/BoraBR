@@ -43,6 +43,30 @@ export interface TerminalResizeRequest {
   rows: number
 }
 
+export interface TerminalNativeGhosttyExternalBridge {
+  available: boolean
+  command?: string | null
+  reason?: string | null
+}
+
+export interface TerminalNativeRendererCapabilities {
+  libghostty: boolean
+  ghosttyExternal: TerminalNativeGhosttyExternalBridge
+}
+
+export interface OpenNativeTerminalRendererRequest {
+  cwd: string
+  issueId?: string
+  shell?: string
+}
+
+export interface OpenNativeTerminalRendererResponse {
+  renderer: 'ghostty-external'
+  sessionId: string
+  command: string
+  pid?: number | null
+}
+
 export function isTerminalAvailable(): boolean {
   return typeof window !== 'undefined' && (!!window.__TAURI__ || !!window.__TAURI_INTERNALS__)
 }
@@ -81,6 +105,16 @@ export async function closeTerminal(sessionId: string): Promise<void> {
 export async function listTerminalSessions(): Promise<TerminalSessionInfo[]> {
   requireTerminal()
   return invoke<TerminalSessionInfo[]>('terminal_list')
+}
+
+export async function getTerminalNativeRendererCapabilities(): Promise<TerminalNativeRendererCapabilities> {
+  requireTerminal()
+  return invoke<TerminalNativeRendererCapabilities>('terminal_native_renderer_capabilities')
+}
+
+export async function openNativeTerminalRenderer(request: OpenNativeTerminalRendererRequest): Promise<OpenNativeTerminalRendererResponse> {
+  requireTerminal()
+  return invoke<OpenNativeTerminalRendererResponse>('terminal_open_native_renderer', { request })
 }
 
 export async function onTerminalData(handler: (payload: TerminalEventPayload) => void): Promise<UnlistenFn> {

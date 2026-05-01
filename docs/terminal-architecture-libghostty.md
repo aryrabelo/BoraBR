@@ -21,6 +21,8 @@ This keeps the risky native-renderer work isolated from the core lifecycle work:
 
 `borabr-m0z.10` replaces the temporary DOM `<pre>` scrollback with an xterm.js terminal emulator fallback. The fallback is intentionally explicit in code via `resolveTerminalRenderer`: the target remains `libghostty`, while the active renderer is `xterm` until a macOS native surface bridge can prove focus, input, resize, packaging, and signing. This keeps the task-terminal UX and PTY lifecycle shippable without hiding the fact that GPU rendering is still blocked on native integration work, and avoids masking PTY output with search-and-replace sanitization.
 
+`borabr-m0z.13` adds the first native renderer bridge boundary. Tauri now exposes Ghostty bridge capabilities and a native renderer launch command. The frontend renderer adapter can select a `ghostty-external` bridge when a launchable Ghostty app/CLI is available, and it keeps the xterm fallback when it is not. On macOS this intentionally requires a launchable `Ghostty.app`; the `ghostty` helper bundled inside cmux can report a version, but Ghostty itself says macOS terminal-emulator launch from that CLI is not supported, so BoraBR must not switch away from xterm unless the native bridge can actually open a renderer.
+
 ## Current App Fit
 
 The app is already a Tauri 2 + Nuxt 4 desktop application. The Rust backend exposes commands through `#[tauri::command]`, uses `tauri::Emitter` to notify the frontend, and already watches `.beads/` for changes. The frontend already consumes Tauri commands from `app/utils/bd-api.ts` and listens to native events in `app/composables/useChangeDetection.ts`.
@@ -108,8 +110,11 @@ Rules for BoraBR:
 4. Add a Vue composable such as `useTerminalSessions` for command calls, event listeners, and cleanup.
 5. Add the docked and task-inline panel UI using a `TerminalRenderer` adapter interface.
 6. Implement the first adapter with xterm.js as the bounded terminal-emulator fallback while the libghostty native bridge is developed.
-7. Add a libghostty spike behind the primary adapter target, starting with macOS only.
-8. Promote libghostty to the active renderer once embedding, focus/input, packaging, and Beads dogfood workflows pass.
+7. Add the Ghostty-compatible native bridge behind the primary adapter target:
+   - detect whether an embedded libghostty bridge or launchable Ghostty external bridge is available,
+   - open the external Ghostty bridge with the selected project cwd and `BORABR_ISSUE_ID` context,
+   - keep xterm active when the native bridge is unavailable.
+8. Replace the external bridge with an embedded libghostty/NSView or Metal-backed surface once focus, input, resize, selection, scrollback, packaging, signing, and Beads dogfood workflows pass.
 
 ## Source Notes
 

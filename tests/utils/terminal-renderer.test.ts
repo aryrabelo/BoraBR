@@ -13,6 +13,24 @@ describe('resolveTerminalRenderer', () => {
     expect(renderer.fallbackReason).toBeNull()
   })
 
+  it('uses a Ghostty-compatible external bridge when the embedded bridge is unavailable', () => {
+    const renderer = resolveTerminalRenderer({
+      target: 'libghostty',
+      capabilities: {
+        libghostty: false,
+        ghosttyExternal: {
+          available: true,
+          command: 'open',
+        },
+      },
+    })
+
+    expect(renderer.target).toBe('libghostty')
+    expect(renderer.active).toBe('ghostty-external')
+    expect(renderer.fallbackReason).toBeNull()
+    expect(renderer.bridgeCommand).toBe('open')
+  })
+
   it('falls back to a terminal emulator with an explicit reason when libghostty is not available', () => {
     const renderer = resolveTerminalRenderer({
       target: 'libghostty',

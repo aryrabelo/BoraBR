@@ -19,17 +19,19 @@ import { Button } from '~/components/ui/button'
 import {
   closeTerminal,
   createTerminalSession,
+  getTerminalNativeRendererCapabilities,
   isTerminalAvailable,
   onTerminalData,
   onTerminalError,
   onTerminalExit,
+  openNativeTerminalRenderer,
   resizeTerminal,
   restartTerminal,
   writeTerminal,
   type TerminalEventPayload,
 } from '~/utils/terminal-api'
 import { TERMINAL_PANEL_MAX_HEIGHT, TERMINAL_PANEL_MIN_HEIGHT, useTerminalPanel } from '~/composables/useTerminalPanel'
-import { resolveTerminalRenderer, type TerminalRendererTarget } from '~/utils/terminal-renderer'
+import { resolveTerminalRenderer, type TerminalRendererCapabilities, type TerminalRendererTarget } from '~/utils/terminal-renderer'
 import { createTerminalEmulator, type TerminalEmulator } from '~/utils/terminal-emulator'
 import { buildTerminalHelperCommands, type TerminalHelperCommand } from '~/utils/terminal-helpers'
 import { resolveWorkflowContractState } from '~/utils/workflow-contracts'
@@ -58,6 +60,7 @@ const isResizing = ref(false)
 const resizeStartY = ref(0)
 const resizeStartHeight = ref(0)
 const uiMessage = ref('')
+const rendererCapabilities = ref<Partial<TerminalRendererCapabilities>>({})
 let uiMessageTimer: ReturnType<typeof setTimeout> | null = null
 const unlisteners: UnlistenFn[] = []
 let activeEmulator: TerminalEmulator | null = null
@@ -65,8 +68,15 @@ let terminalMountToken = 0
 
 const isInline = computed(() => props.mode === 'inline')
 const currentProjectName = computed(() => props.projectName || projectNameFromPath(props.projectPath))
-const activeCanWrite = computed(() => !!panel.activeSession.value?.backendSessionId && panel.activeSession.value.status === 'running')
-const renderer = computed(() => resolveTerminalRenderer({ target: props.rendererTarget ?? 'libghostty' }))
+const renderer = computed(() => resolveTerminalRenderer({
+  target: props.rendererTarget ?? 'libghostty',
+  capabilities: rendererCapabilities.value,
+}))
+const activeCanWrite = computed(() =>
+  renderer.value.active !== 'ghostty-external'
+  && !!panel.activeSession.value?.backendSessionId
+  && panel.activeSession.value.status === 'running',
+)
 const shouldProtectRunningSession = computed(() => props.protectRunningSession ?? isInline.value)
 const helperCommands = computed(() => buildTerminalHelperCommands(props.selectedIssue
   ? {
@@ -104,6 +114,10 @@ function setUiMessage(message: string) {
 
 function sessionForBackend(backendSessionId: string) {
   return panel.sessions.value.find(session => session.backendSessionId === backendSessionId)
+}
+
+function isNativeRendererSession(session?: { backendSessionId?: string } | null) {
+  return session?.backendSessionId?.startsWith('native-term-') === true
 }
 
 function terminalSize() {
@@ -182,6 +196,16 @@ async function createSession() {
   })
 
   try {
+    if (renderer.value.active === 'ghostty-external') {
+      const info = await openNativeTerminalRenderer({
+        cwd: props.projectPath,
+        issueId: props.selectedIssue?.id,
+      })
+      panel.markRunning(session.id, info.sessionId)
+      panel.appendOutput(session.id, `${info.renderer} opened with ${info.command}\n`)
+      return
+    }
+
     const info = await createTerminalSession({
       cwd: props.projectPath,
       issueId: props.selectedIssue?.id,
@@ -214,7 +238,7 @@ async function closeSessionWithOptions(id: string, options: { force?: boolean } 
   if (isInline.value && panel.sessions.value.length === 0) {
     emit('closed')
   }
-  if (!session?.backendSessionId || !isTerminalAvailable()) return
+  if (!session?.backendSessionId || isNativeRendererSession(session) || !isTerminalAvailable()) return
   try {
     await closeTerminal(session.backendSessionId)
   } catch (error) {
@@ -264,6 +288,16 @@ async function restartActiveSession() {
 
   panel.restartSession(session.id)
   try {
+    if (isNativeRendererSession(session)) {
+      const info = await openNativeTerminalRenderer({
+        cwd: session.projectPath,
+        issueId: session.issueId,
+      })
+      panel.markRunning(session.id, info.sessionId)
+      panel.appendOutput(session.id, `${info.renderer} opened with ${info.command}\n`)
+      return
+    }
+
     const info = await restartTerminal(session.backendSessionId)
     panel.markRunning(session.id, info.sessionId)
     await resizeActiveBackend()
@@ -414,6 +448,17 @@ watch(selectedIssueActivity, (next, previous) => {
 
 onMounted(async () => {
   if (isTerminalAvailable()) {
+    try {
+      rendererCapabilities.value = await getTerminalNativeRendererCapabilities()
+    } catch (error) {
+      rendererCapabilities.value = {
+        libghostty: false,
+        ghosttyExternal: {
+          available: false,
+          reason: error instanceof Error ? error.message : String(error),
+        },
+      }
+    }
     unlisteners.push(await onTerminalData(handleTerminalData))
     unlisteners.push(await onTerminalExit(handleTerminalExit))
     unlisteners.push(await onTerminalError(handleTerminalError))
@@ -432,7 +477,7 @@ onUnmounted(() => {
     emit('activity-change', props.selectedIssue.id, false)
   }
   for (const session of panel.sessions.value) {
-    if (session.backendSessionId && isTerminalAvailable()) {
+    if (session.backendSessionId && !isNativeRendererSession(session) && isTerminalAvailable()) {
       closeTerminal(session.backendSessionId).catch(() => {})
     }
   }
@@ -533,6 +578,23 @@ onUnmounted(() => {
       </div>
 
       <div
+        v-if="renderer.active === 'ghostty-external'"
+        class="flex min-h-0 flex-1 items-center justify-center bg-zinc-950 px-4 text-sm text-zinc-300"
+      >
+        <div class="flex max-w-xl items-center gap-3">
+          <SquareTerminal class="h-5 w-5 shrink-0 text-emerald-300" />
+          <div class="min-w-0">
+            <div class="font-medium text-zinc-100">Ghostty native renderer</div>
+            <div class="truncate text-xs text-zinc-500">{{ renderer.bridgeCommand || 'ghostty' }}</div>
+          </div>
+          <Button variant="secondary" size="sm" :disabled="!panel.activeSession.value" @click="restartActiveSession">
+            Open
+          </Button>
+        </div>
+      </div>
+
+      <div
+        v-else
         ref="outputRef"
         class="terminal-output min-h-0 flex-1 overflow-hidden"
       />
