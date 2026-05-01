@@ -50,6 +50,7 @@ import {
   buildActionCenterProjectActionState,
   buildActionCenterProjectIdleState,
   normalizeActionCenterProjectPath,
+  pickVisibleActionCenterItems,
   type ActionCenterProjectActionState,
   type ActionCenterProjectIdleState,
 } from '~/utils/action-center'
@@ -190,6 +191,7 @@ const actionCenterTerminalError = ref('')
 const actionCenterTerminalErrorItemId = ref('')
 const PROJECT_IDLE_THRESHOLD_MS = 5 * 60 * 1000
 const ACTION_CENTER_PROJECT_POLL_MS = 60 * 1000
+const ACTION_CENTER_VISIBLE_LIMIT = 3
 
 type ActionCenterSource = 'br' | 'github' | 'other'
 
@@ -313,7 +315,7 @@ const projectIdleActionItems = computed<ActionCenterProjectIdleItem[]>(() => {
 })
 
 const actionCenterItems = computed<ActionCenterItem[]>(() => {
-  return [...projectIdleActionItems.value, ...readyActionItems.value]
+  const items = [...projectIdleActionItems.value, ...readyActionItems.value]
     .filter((item) => {
       if (dismissedActionCenterItems.value[item.actionId]) return false
       const snoozedUntil = snoozedActionCenterItems.value[item.actionId]
@@ -328,6 +330,8 @@ const actionCenterItems = computed<ActionCenterItem[]>(() => {
       }
       return a.id.localeCompare(b.id)
     })
+
+  return pickVisibleActionCenterItems(items, ACTION_CENTER_VISIBLE_LIMIT)
 })
 
 const actionCenterCount = computed(() => actionCenterItems.value.length)
@@ -716,22 +720,27 @@ const handleRunActionItemInCmux = async (item: ActionCenterItem) => {
   }
 }
 
-const handleTakeActionItem = async (item: ActionCenterItem) => {
-  handleCloseActionCenter()
-  if (item.actionKind === 'project_idle') {
-    if (isMobileView.value) {
-      mobilePanel.value = 'issues'
-    }
-    if (normalizeProjectPath(beadsPath.value || '') !== normalizeProjectPath(item.projectPath)) {
-      setPath(item.projectPath)
-      await handlePathChange()
-    }
-    return
+const switchToActionProject = async (item: ActionCenterItem) => {
+  if (isMobileView.value) {
+    mobilePanel.value = 'issues'
   }
+
   if (normalizeProjectPath(beadsPath.value || '') !== normalizeProjectPath(item.projectPath)) {
     setPath(item.projectPath)
     await handlePathChange()
   }
+}
+
+const handleOpenActionProject = async (item: ActionCenterItem) => {
+  handleCloseActionCenter()
+  await switchToActionProject(item)
+}
+
+const handleTakeActionItem = async (item: ActionCenterItem) => {
+  handleCloseActionCenter()
+  await switchToActionProject(item)
+  if (item.actionKind === 'project_idle') return
+
   await handleSelectIssue(item)
 }
 
@@ -1321,7 +1330,18 @@ watch(
                               <span class="inline-flex rounded-full border px-2 py-0.5" :class="actionBadgeClass[action.actionSource]">
                                 {{ action.actionSourceLabel }}
                               </span>
-                              <span>{{ action.projectName }}</span>
+                              <button
+                                type="button"
+                                class="inline-flex max-w-[12rem] items-center rounded-sm font-medium text-foreground hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                :title="`Abrir projeto ${action.projectName}`"
+                                @click="handleOpenActionProject(action)"
+                              >
+                                <span class="truncate">{{ action.projectName }}</span>
+                              </button>
+                              <CopyableId
+                                v-if="action.actionKind === 'issue'"
+                                :value="action.id"
+                              />
                               <span>{{ formatActionDate(action.actionTimestamp) }}</span>
                               <span>#{{ index + 1 }}</span>
                             </div>
@@ -1331,7 +1351,7 @@ watch(
                             </p>
                             <div class="mt-3 flex flex-wrap gap-2">
                               <Button size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
-                                {{ action.actionKind === 'project_idle' ? 'Abrir projeto' : 'Abrir tarefa' }}
+                                {{ action.actionKind === 'project_idle' ? 'Abrir projeto' : 'Abrir issue' }}
                               </Button>
                               <Button
                                 v-if="action.actionKind === 'issue'"
@@ -1621,7 +1641,18 @@ watch(
                           <span class="inline-flex rounded-full border px-2 py-0.5" :class="actionBadgeClass[action.actionSource]">
                             {{ action.actionSourceLabel }}
                           </span>
-                          <span>{{ action.projectName }}</span>
+                          <button
+                            type="button"
+                            class="inline-flex max-w-[12rem] items-center rounded-sm font-medium text-foreground hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            :title="`Abrir projeto ${action.projectName}`"
+                            @click="handleOpenActionProject(action)"
+                          >
+                            <span class="truncate">{{ action.projectName }}</span>
+                          </button>
+                          <CopyableId
+                            v-if="action.actionKind === 'issue'"
+                            :value="action.id"
+                          />
                           <span>{{ formatActionDate(action.actionTimestamp) }}</span>
                           <span>#{{ index + 1 }}</span>
                         </div>
@@ -1631,7 +1662,7 @@ watch(
                         </p>
                         <div class="mt-3 flex flex-wrap gap-2">
                           <Button size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
-                            {{ action.actionKind === 'project_idle' ? 'Abrir projeto' : 'Abrir tarefa' }}
+                            {{ action.actionKind === 'project_idle' ? 'Abrir projeto' : 'Abrir issue' }}
                           </Button>
                           <Button
                             v-if="action.actionKind === 'issue'"

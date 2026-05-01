@@ -4,6 +4,7 @@ import {
   buildActionCenterProjectActionState,
   buildActionCenterProjectIdleState,
   countActionCenterInProgressIssues,
+  pickVisibleActionCenterItems,
 } from '~/utils/action-center'
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
@@ -79,6 +80,22 @@ describe('Action Center project state', () => {
     })
 
     expect(state.readyIssues).toEqual([childTask])
+  })
+
+  it('shows at most three visible actions and only one per project', () => {
+    const items = [
+      { id: 'nuran-1', projectPath: '/repos/nuran' },
+      { id: 'nuran-2', projectPath: '/repos/nuran/' },
+      { id: 'br-1', projectPath: '/repos/br' },
+      { id: 'cmux-1', projectPath: '/repos/cmux' },
+      { id: 'extra-1', projectPath: '/repos/extra' },
+    ]
+
+    expect(pickVisibleActionCenterItems(items, 3).map(item => item.id)).toEqual([
+      'nuran-1',
+      'br-1',
+      'cmux-1',
+    ])
   })
 
   it('does not create an idle notification while the project has in-progress work', () => {

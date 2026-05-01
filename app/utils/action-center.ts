@@ -32,6 +32,26 @@ interface BuildActionCenterProjectIdleStateOptions {
 
 export const normalizeActionCenterProjectPath = (path: string) => path.replace(/\/+$/, '')
 
+export function pickVisibleActionCenterItems<T extends { projectPath: string }>(
+  items: T[],
+  limit: number,
+): T[] {
+  const selected: T[] = []
+  const selectedProjectPaths = new Set<string>()
+
+  for (const item of items) {
+    const projectKey = normalizeActionCenterProjectPath(item.projectPath)
+    if (selectedProjectPaths.has(projectKey)) continue
+
+    selected.push(item)
+    selectedProjectPaths.add(projectKey)
+
+    if (selected.length >= limit) break
+  }
+
+  return selected
+}
+
 export function countActionCenterInProgressIssues(issues: Pick<Issue, 'status'>[]): number {
   return issues.filter(issue => issue.status === 'in_progress').length
 }
