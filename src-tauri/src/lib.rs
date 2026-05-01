@@ -452,6 +452,19 @@ pub struct CmuxFocusSurfaceResponse {
     pub stdout: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct CmuxSendPromptRequest {
+    pub surface: String,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CmuxSendPromptResponse {
+    pub surface: String,
+    pub command: String,
+    pub stdout: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TerminalNativeRendererCapabilitiesResponse {
     pub libghostty: bool,
@@ -508,7 +521,7 @@ fn priority_to_number(priority: &str) -> String {
 }
 
 fn normalize_issue_type(issue_type: &str) -> String {
-    let valid_types = ["bug", "task", "feature", "epic", "chore"];
+    let valid_types = ["bug", "plan", "task", "feature", "epic", "chore"];
     if valid_types.contains(&issue_type) {
         issue_type.to_string()
     } else {
@@ -564,12 +577,50 @@ fn validate_cmux_surface_id(surface: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_cmux_prompt(prompt: &str) -> Result<(), String> {
+    let value = prompt.trim();
+    if value.is_empty() {
+        return Err("cmux prompt is required".to_string());
+    }
+    if value.len() > 4096 {
+        return Err("cmux prompt is too long".to_string());
+    }
+    if value.chars().any(|ch| ch == '\0') {
+        return Err("cmux prompt contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
 fn should_fallback_cmux_focus(stderr: &str) -> bool {
     stderr.contains("Unknown command") || stderr.contains("focus-surface")
 }
 
 fn cmux_focus_surface_command(surface: &str) -> Vec<String> {
     vec!["focus-surface".to_string(), "--surface".to_string(), surface.to_string()]
+}
+
+fn cmux_focus_surface_rpc_command(surface: &str) -> Vec<String> {
+    vec![
+        "rpc".to_string(),
+        "surface.focus".to_string(),
+        format!("{{\"surface_id\":\"{}\"}}", surface),
+    ]
+}
+
+fn cmux_identify_surface_command(surface: &str) -> Vec<String> {
+    vec![
+        "identify".to_string(),
+        "--surface".to_string(),
+        surface.to_string(),
+    ]
+}
+
+fn cmux_select_workspace_command(workspace: &str) -> Vec<String> {
+    vec![
+        "select-workspace".to_string(),
+        "--workspace".to_string(),
+        workspace.to_string(),
+    ]
 }
 
 fn cmux_focus_surface_fallback_command(surface: &str) -> Vec<String> {
@@ -580,6 +631,68 @@ fn cmux_focus_surface_fallback_command(surface: &str) -> Vec<String> {
         "--focus".to_string(),
         "true".to_string(),
     ]
+}
+
+fn cmux_send_prompt_command(surface: &str, prompt: &str) -> Vec<String> {
+    vec![
+        "send".to_string(),
+        "--surface".to_string(),
+        surface.to_string(),
+        format!("{}\\n", prompt.trim()),
+    ]
+}
+
+fn parse_workspace_ref_from_cmux_identify_output(stdout: &str) -> Option<String> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(workspace_ref) = value.get("workspace_ref").and_then(|v| v.as_str()) {
+            if !workspace_ref.trim().is_empty() {
+                return Some(workspace_ref.to_string());
+            }
+        }
+    }
+
+    for line in trimmed.lines() {
+        if !line.contains("workspace_ref") {
+            continue;
+        }
+
+        let key_pos = match line.find("workspace_ref") {
+            Some(pos) => pos,
+            None => continue,
+        };
+        let mut value = line[key_pos + "workspace_ref".len()..].trim();
+        value = value.trim_start_matches(|c: char| c == ':' || c == '=' || c.is_whitespace());
+        if value.is_empty() {
+            continue;
+        }
+
+        if let Some(first) = value.chars().next() {
+            if first == '"' || first == '\'' {
+                let value = &value[1..];
+                let end = value.find(first).unwrap_or(value.len());
+                let parsed = value[..end].trim();
+                if !parsed.is_empty() {
+                    return Some(parsed.to_string());
+                }
+                continue;
+            }
+        }
+
+        let end = value
+            .find(|c: char| c == ',' || c == ';' || c.is_whitespace())
+            .unwrap_or(value.len());
+        let parsed = value[..end].trim();
+        if !parsed.is_empty() {
+            return Some(parsed.to_string());
+        }
+    }
+
+    None
 }
 
 fn run_cmux(args: &[String]) -> Result<std::process::Output, String> {
@@ -2815,6 +2928,7 @@ async fn bd_count(options: CwdOptions) -> Result<CountResult, String> {
 
     let mut by_type: HashMap<String, usize> = HashMap::new();
     by_type.insert("bug".to_string(), 0);
+    by_type.insert("plan".to_string(), 0);
     by_type.insert("task".to_string(), 0);
     by_type.insert("feature".to_string(), 0);
     by_type.insert("epic".to_string(), 0);
@@ -3117,6 +3231,34 @@ async fn bd_update(id: String, updates: UpdatePayload) -> Result<Option<Issue>, 
 }
 
 #[tauri::command]
+async fn cmux_send_prompt(request: CmuxSendPromptRequest) -> Result<CmuxSendPromptResponse, String> {
+    let surface = request.surface.trim().trim_start_matches('{').trim_end_matches('}').to_string();
+    validate_cmux_surface_id(&surface)?;
+    validate_cmux_prompt(&request.prompt)?;
+
+    log::info!("[cmux] [task-terminal] requested prompt send for surface {}", surface);
+
+    let send_args = cmux_send_prompt_command(&surface, &request.prompt);
+    log::info!("[cmux] [task-terminal] trying send command: cmux send --surface {}", surface);
+    match run_cmux(&send_args) {
+        Ok(output) if output.status.success() => Ok(CmuxSendPromptResponse {
+            surface,
+            command: send_args.join(" "),
+            stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        }),
+        Ok(output) => Err(format!(
+            "cmux {} failed: {}",
+            send_args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        )),
+        Err(error) => {
+            log::error!("[cmux] [task-terminal] send command execution error: {}", error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
 async fn agent_process_status(request: AgentProcessStatusRequest) -> Result<AgentProcessStatusResponse, String> {
     Ok(classify_agent_process_status(request, probe_process_running))
 }
@@ -3126,9 +3268,13 @@ async fn cmux_focus_surface(request: CmuxFocusSurfaceRequest) -> Result<CmuxFocu
     let surface = request.surface.trim().trim_start_matches('{').trim_end_matches('}').to_string();
     validate_cmux_surface_id(&surface)?;
 
+    log::info!("[cmux] [task-terminal] requested focus for surface {}", surface);
+
     let focus_args = cmux_focus_surface_command(&surface);
+    log::info!("[cmux] [task-terminal] trying primary command: {}", focus_args.join(" "));
     match run_cmux(&focus_args) {
         Ok(output) if output.status.success() => {
+            log::info!("[cmux] [task-terminal] primary command succeeded: {}", focus_args.join(" "));
             return Ok(CmuxFocusSurfaceResponse {
                 surface,
                 command: focus_args.join(" "),
@@ -3137,14 +3283,104 @@ async fn cmux_focus_surface(request: CmuxFocusSurfaceRequest) -> Result<CmuxFocu
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            log::warn!("[cmux] [task-terminal] primary command failed: {} stderr={} ", focus_args.join(" "), stderr.trim());
             if !should_fallback_cmux_focus(&stderr) {
                 return Err(format!("cmux {} failed: {}", focus_args.join(" "), stderr.trim()));
             }
         }
-        Err(error) => return Err(error),
+        Err(error) => {
+            log::warn!("[cmux] [task-terminal] primary command execution error: {}", error);
+            return Err(error);
+        }
+    }
+
+    let rpc_args = cmux_focus_surface_rpc_command(&surface);
+    log::info!("[cmux] [task-terminal] trying rpc command: {}", rpc_args.join(" "));
+    match run_cmux(&rpc_args) {
+        Ok(output) if output.status.success() => {
+            log::info!("[cmux] [task-terminal] rpc command succeeded: {}", rpc_args.join(" "));
+            return Ok(CmuxFocusSurfaceResponse {
+                surface,
+                command: rpc_args.join(" "),
+                stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            });
+        }
+        Ok(output) => {
+            log::warn!(
+                "[cmux] [task-terminal] rpc command failed: {} stderr={}",
+                rpc_args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Err(error) => {
+            log::warn!("[cmux] [task-terminal] rpc command execution error: {}", error);
+        }
+    }
+
+    let identify_args = cmux_identify_surface_command(&surface);
+    log::info!(
+        "[cmux] [task-terminal] trying identify command: {}",
+        identify_args.join(" ")
+    );
+    match run_cmux(&identify_args) {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let workspace_ref =
+                parse_workspace_ref_from_cmux_identify_output(&stdout).filter(|value| {
+                    value.starts_with("workspace:")
+                });
+            if let Some(workspace_ref) = workspace_ref {
+                let select_args = cmux_select_workspace_command(&workspace_ref);
+                log::info!(
+                    "[cmux] [task-terminal] trying focus with workspace: {}",
+                    select_args.join(" ")
+                );
+                match run_cmux(&select_args) {
+                    Ok(output) if output.status.success() => {
+                        log::info!(
+                            "[cmux] [task-terminal] workspace command succeeded: {}",
+                            select_args.join(" ")
+                        );
+                        return Ok(CmuxFocusSurfaceResponse {
+                            surface,
+                            command: select_args.join(" "),
+                            stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+                        });
+                    }
+                    Ok(output) => {
+                        log::warn!(
+                            "[cmux] [task-terminal] workspace command failed: {} stderr={}",
+                            select_args.join(" "),
+                            String::from_utf8_lossy(&output.stderr).trim()
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "[cmux] [task-terminal] workspace command execution error: {}",
+                            error
+                        );
+                    }
+                }
+            } else {
+                log::warn!(
+                    "[cmux] [task-terminal] could not parse workspace ref from identify output"
+                );
+            }
+        }
+        Ok(output) => {
+            log::warn!(
+                "[cmux] [task-terminal] identify command failed: {} stderr={}",
+                identify_args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Err(error) => {
+            log::warn!("[cmux] [task-terminal] identify command execution error: {}", error);
+        }
     }
 
     let fallback_args = cmux_focus_surface_fallback_command(&surface);
+    log::info!("[cmux] [task-terminal] trying fallback command: {}", fallback_args.join(" "));
     match run_cmux(&fallback_args) {
         Ok(output) if output.status.success() => Ok(CmuxFocusSurfaceResponse {
             surface,
@@ -3156,7 +3392,10 @@ async fn cmux_focus_surface(request: CmuxFocusSurfaceRequest) -> Result<CmuxFocu
             fallback_args.join(" "),
             String::from_utf8_lossy(&output.stderr).trim(),
         )),
-        Err(error) => Err(error),
+        Err(error) => {
+            log::error!("[cmux] [task-terminal] fallback command execution error: {}", error);
+            Err(error)
+        }
     }
 }
 
@@ -5271,6 +5510,7 @@ pub fn run() {
             launch_probe,
             agent_process_status,
             cmux_focus_surface,
+            cmux_send_prompt,
             terminal_native_renderer_capabilities,
             terminal_open_native_renderer,
             terminal::terminal_create,
@@ -5370,7 +5610,7 @@ mod tests {
     }
 
     #[test]
-    fn cmux_focus_uses_new_command_with_legacy_fallback() {
+    fn cmux_focus_uses_rpc_and_legacy_fallback() {
         let surface = "7DCCBE94-C09F-4E40-80D6-23FAEFD7D116";
 
         assert_eq!(
@@ -5378,11 +5618,48 @@ mod tests {
             vec!["focus-surface", "--surface", surface],
         );
         assert_eq!(
+            cmux_focus_surface_rpc_command(surface),
+            vec!["rpc", "surface.focus", "{\"surface_id\":\"7DCCBE94-C09F-4E40-80D6-23FAEFD7D116\"}"],
+        );
+        assert_eq!(
+            cmux_identify_surface_command(surface),
+            vec!["identify", "--surface", surface],
+        );
+        assert_eq!(
+            cmux_select_workspace_command("workspace:25"),
+            vec!["select-workspace", "--workspace", "workspace:25"],
+        );
+        assert_eq!(
             cmux_focus_surface_fallback_command(surface),
             vec!["move-surface", "--surface", surface, "--focus", "true"],
         );
+        assert_eq!(
+            cmux_send_prompt_command(surface, "Continuar a tarefa aawk usando a skill BR"),
+            vec!["send", "--surface", surface, "Continuar a tarefa aawk usando a skill BR\\n"],
+        );
         assert!(should_fallback_cmux_focus("Error: Unknown command: focus-surface"));
         assert!(!should_fallback_cmux_focus("permission denied"));
+    }
+
+    #[test]
+    fn parse_workspace_ref_from_cmux_identify_output_handles_text_and_json() {
+        let json = r#"{"surface_id":"surface:139","workspace_ref":"workspace:25"}"#;
+        let plain = "surface_ref: surface:139\nworkspace_ref: workspace:25\n";
+        let quoted = "workspace_ref='workspace:25'";
+
+        assert_eq!(
+            parse_workspace_ref_from_cmux_identify_output(json),
+            Some("workspace:25".to_string())
+        );
+        assert_eq!(
+            parse_workspace_ref_from_cmux_identify_output(plain),
+            Some("workspace:25".to_string())
+        );
+        assert_eq!(
+            parse_workspace_ref_from_cmux_identify_output(quoted),
+            Some("workspace:25".to_string())
+        );
+        assert_eq!(parse_workspace_ref_from_cmux_identify_output("no workspace"), None);
     }
 
     #[test]

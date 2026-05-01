@@ -117,10 +117,11 @@ export const priorityOrder: Record<string, number> = {
 
 export const typeOrder: Record<string, number> = {
   bug: 0,
-  feature: 1,
-  task: 2,
-  epic: 3,
-  chore: 4,
+  plan: 1,
+  feature: 2,
+  task: 3,
+  epic: 4,
+  chore: 5,
 }
 
 export const REVIEW_CHANGES_REQUESTED_LABEL = 'review:changes_requested'
@@ -381,7 +382,7 @@ export function computeStatsFromIssues(issues: Issue[]): DashboardStats {
     blocked: 0,
     closed: 0,
     ready: 0,
-    byType: { bug: 0, task: 0, feature: 0, epic: 0, chore: 0 },
+    byType: { bug: 0, plan: 0, task: 0, feature: 0, epic: 0, chore: 0 },
     byPriority: { p0: 0, p1: 0, p2: 0, p3: 0, p4: 0 },
   }
 

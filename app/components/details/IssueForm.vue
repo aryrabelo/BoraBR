@@ -111,6 +111,7 @@ watch(
 
 const typeOptions: { value: IssueType; label: string }[] = [
   { value: 'bug', label: 'Bug' },
+  { value: 'plan', label: 'Plan' },
   { value: 'task', label: 'Task' },
   { value: 'feature', label: 'Feature' },
   { value: 'epic', label: 'Epic' },

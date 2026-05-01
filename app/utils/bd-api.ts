@@ -22,6 +22,12 @@ export interface CmuxFocusSurfaceResponse {
   stdout: string
 }
 
+export interface CmuxSendPromptResponse {
+  surface: string
+  command: string
+  stdout: string
+}
+
 // Type declarations for Tauri detection
 declare global {
   interface Window {
@@ -86,6 +92,13 @@ export async function cmuxFocusSurface(surface: string): Promise<CmuxFocusSurfac
     return invoke<CmuxFocusSurfaceResponse>('cmux_focus_surface', { request: { surface } })
   }
   throw new Error('cmux focus is only available in the desktop app')
+}
+
+export async function cmuxSendPrompt(surface: string, prompt: string): Promise<CmuxSendPromptResponse> {
+  if (isTauri()) {
+    return invoke<CmuxSendPromptResponse>('cmux_send_prompt', { request: { surface, prompt } })
+  }
+  throw new Error('cmux prompt is only available in the desktop app')
 }
 
 async function postExternalData(url: string, body: string): Promise<string> {

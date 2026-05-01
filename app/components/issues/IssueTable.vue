@@ -26,7 +26,7 @@ import {
 import { Ban, SquareTerminal } from 'lucide-vue-next'
 import { useKeyboardNavigation } from '~/composables/useKeyboardNavigation'
 import { useTaskTerminalSlots } from '~/composables/useTaskTerminalSlots'
-import { cmuxFocusSurface } from '~/utils/bd-api'
+import { cmuxFocusSurface, logFrontend } from '~/utils/bd-api'
 import {
   buildTaskTerminalAssigneeDisplay,
   focusTaskTerminalSource,
@@ -131,10 +131,11 @@ const priorityOrder: Record<IssuePriority, number> = {
 
 const typeOrder: Record<IssueType, number> = {
   bug: 0,
-  feature: 1,
-  task: 2,
-  epic: 3,
-  chore: 4,
+  plan: 1,
+  feature: 2,
+  task: 3,
+  epic: 4,
+  chore: 5,
 }
 
 // Natural sort comparison for IDs (handles multi-digit numbers correctly)
@@ -273,25 +274,39 @@ function showTaskTerminalError(message: string) {
   }, 6000)
 }
 
-const toggleTerminalForIssue = (issue: Issue, event: MouseEvent) => {
+const logTerminalDebug = async (message: string) => {
+  await logFrontend('info', `[task-terminal] ${message}`)
+}
+
+const toggleTerminalForIssue = async (issue: Issue, event: MouseEvent) => {
   event.stopPropagation()
   const source = resolveTaskTerminalSource(issue)
-  focusTaskTerminalSource(source, {
-    focusCmuxSurface: async surfaceId => {
-      await cmuxFocusSurface(surfaceId)
-    },
-    showError: showTaskTerminalError,
-    openEmbedded: () => {
-      if (isIssueTerminalOpen(issue.id)) {
-        closeIssueTerminal(issue.id)
-      } else {
-        openIssueTerminal(issue.id)
-      }
-    },
-  }).catch((error) => {
+  try {
+    await logTerminalDebug(`issue ${issue.id} clicked with source=${source.origin} assignee=${issue.assignee ?? '-'}`)
+    const result = await focusTaskTerminalSource(source, {
+      focusCmuxSurface: async surfaceId => {
+        await logTerminalDebug(`issue ${issue.id} focusing cmux surface ${surfaceId}`)
+        await cmuxFocusSurface(surfaceId)
+        await logTerminalDebug(`issue ${issue.id} focused cmux surface ${surfaceId}`)
+      },
+      showError: showTaskTerminalError,
+      openEmbedded: async () => {
+        if (isIssueTerminalOpen(issue.id)) {
+          await logTerminalDebug(`issue ${issue.id} closing embedded terminal`) // parity log for toggle path
+          closeIssueTerminal(issue.id)
+        } else {
+          await logTerminalDebug(`issue ${issue.id} opening embedded terminal`)
+          openIssueTerminal(issue.id)
+        }
+      },
+    })
+    await logTerminalDebug(`issue ${issue.id} terminal flow result=${result}`)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
     console.error('Failed to open task terminal', error)
-    showTaskTerminalError(error instanceof Error ? error.message : String(error))
-  })
+    await logTerminalDebug(`issue ${issue.id} terminal flow failed: ${message}`)
+    showTaskTerminalError(message)
+  }
 }
 
 const forceCloseTerminalForIssue = (issueId: string) => {

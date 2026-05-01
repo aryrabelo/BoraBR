@@ -62,6 +62,7 @@ const priorityLabels: Record<IssuePriority, string> = {
 
 const typeLabels: Record<IssueType, string> = {
   bug: 'Bug',
+  plan: 'Plan',
   feature: 'Feature',
   task: 'Task',
   epic: 'Epic',

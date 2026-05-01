@@ -68,4 +68,22 @@ describe('terminal helpers', () => {
     expect(helpers.find(helper => helper.id === 'workflow-next')?.command).toBe('br workflow next borabr-m0z.9')
     expect(helpers.find(helper => helper.id === 'review-start')?.label).toBe('Legacy Review')
   })
+
+  it('shows workflow commands for project type-scoped bug and plan workflows', () => {
+    const bugHelpers = buildTerminalHelperCommands({
+      id: 'borabr-bug',
+      title: 'Fix broken save',
+      type: 'bug',
+      labels: [],
+    })
+    const planHelpers = buildTerminalHelperCommands({
+      id: 'borabr-plan',
+      title: 'Plan workflow rollout',
+      type: 'plan',
+      labels: [],
+    })
+
+    expect(bugHelpers.find(helper => helper.id === 'workflow-check')?.command).toBe('br workflow check borabr-bug')
+    expect(planHelpers.find(helper => helper.id === 'workflow-next')?.command).toBe('br workflow next borabr-plan')
+  })
 })

@@ -155,7 +155,7 @@ export async function bdCreate(
 ) {
   const args: string[] = [`"${title}"`]
 
-  if (options?.description) {
+  if (options?.description !== undefined) {
     args.push(`--description="${escapeQuotes(options.description)}"`)
   }
   if (options?.type) {
@@ -215,7 +215,7 @@ export async function bdUpdate(
   if (updates.title) {
     args.push(`--title="${escapeQuotes(updates.title)}"`)
   }
-  if (updates.description) {
+  if (updates.description !== undefined) {
     args.push(`--description="${escapeQuotes(updates.description)}"`)
   }
   if (updates.type) {

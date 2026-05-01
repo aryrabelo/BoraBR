@@ -35,10 +35,19 @@ describe('workflow contracts', () => {
     ])
   })
 
+  it('infers project workflows from bug and plan issue types', () => {
+    expect(detectWorkflowContracts(makeIssue({ type: 'bug' }))).toEqual([
+      { id: 'bug-investigation', label: 'workflow:bug-investigation', source: 'project' },
+    ])
+    expect(detectWorkflowContracts(makeIssue({ type: 'plan' }))).toEqual([
+      { id: 'planning-approval', label: 'workflow:planning-approval', source: 'project' },
+    ])
+  })
+
   it('uses br workflow output as authoritative state and next commands', () => {
     const parsed = parseWorkflowCheckOutput(JSON.stringify({
-      state: 'step_ready',
-      workflow_id: 'review',
+      status: 'steps_incomplete',
+      workflows: [{ id: 'review' }],
       next_commands: [
         'br workflow next borabr-m0z.9',
         'br workflow steps borabr-m0z.9 --apply',
@@ -49,13 +58,27 @@ describe('workflow contracts', () => {
       labels: ['workflow:review'],
     }), { check: parsed })
 
-    expect(state.kind).toBe('step_ready')
+    expect(state.kind).toBe('step_running')
     expect(state.workflowId).toBe('review')
     expect(state.nextCommands).toEqual([
       'br workflow next borabr-m0z.9',
       'br workflow steps borabr-m0z.9 --apply',
     ])
     expect(state.inferredPolicy).toBe(false)
+  })
+
+  it('maps br gates_missing workflow output to blocked', () => {
+    const parsed = parseWorkflowCheckOutput({
+      status: 'gates_missing',
+      workflows: [{ id: 'planning-approval' }],
+      next_commands: ['br comments add borabr-m0z.9 --message "evidence: <summary>" --json'],
+    })
+
+    expect(parsed).toEqual({
+      kind: 'blocked',
+      workflowId: 'planning-approval',
+      nextCommands: ['br comments add borabr-m0z.9 --message "evidence: <summary>" --json'],
+    })
   })
 
   it('shows missing setup guidance without creating workflow steps locally', () => {
@@ -66,6 +89,18 @@ describe('workflow contracts', () => {
     expect(state.kind).toBe('uninitialized')
     expect(state.nextCommands).toEqual(['br workflow check borabr-m0z.9'])
     expect(state.inferredPolicy).toBe(false)
+  })
+
+  it('shows setup guidance for inferred project workflows', () => {
+    const state = resolveWorkflowContractState(makeIssue({
+      type: 'bug',
+      labels: [],
+    }))
+
+    expect(state.kind).toBe('uninitialized')
+    expect(state.workflowId).toBe('bug-investigation')
+    expect(state.nextCommands).toEqual(['br workflow check borabr-m0z.9'])
+    expect(state.inferredPolicy).toBe(true)
   })
 
   it('marks old in_review state as legacy when no workflow contract is present', () => {

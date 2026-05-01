@@ -70,6 +70,7 @@ const priorityOptions: { value: IssuePriority; label: string }[] = [
 // Type options
 const typeOptions: { value: IssueType; label: string }[] = [
   { value: 'bug', label: 'Bug' },
+  { value: 'plan', label: 'Plan' },
   { value: 'feature', label: 'Feature' },
   { value: 'task', label: 'Task' },
   { value: 'epic', label: 'Epic' },

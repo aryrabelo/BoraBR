@@ -43,6 +43,16 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '~/components/ui/tooltip'
+import { Bell, ArrowLeft, SquareTerminal } from 'lucide-vue-next'
+import { cmuxFocusSurface, cmuxSendPrompt } from '~/utils/bd-api'
+import { resolveTaskTerminalSource } from '~/utils/task-terminal-source'
+import {
+  buildActionCenterProjectActionState,
+  buildActionCenterProjectIdleState,
+  normalizeActionCenterProjectPath,
+  type ActionCenterProjectActionState,
+  type ActionCenterProjectIdleState,
+} from '~/utils/action-center'
 
 // Composables
 const { filters, toggleStatus, toggleType, togglePriority, toggleAssignee, clearFilters, setStatusFilter, setSearch, toggleLabelFilter } = useFilters()
@@ -175,6 +185,162 @@ const editId = computed(() => {
 // Mobile state
 const isMobileView = ref(false)
 const mobilePanel = ref<'dashboard' | 'issues' | 'details'>('issues')
+const isActionCenterOpen = ref(false)
+const actionCenterTerminalError = ref('')
+const actionCenterTerminalErrorItemId = ref('')
+const PROJECT_IDLE_THRESHOLD_MS = 5 * 60 * 1000
+const ACTION_CENTER_PROJECT_POLL_MS = 60 * 1000
+
+type ActionCenterSource = 'br' | 'github' | 'other'
+
+interface ActionCenterIssueItem extends Issue {
+  actionKind: 'issue'
+  actionId: string
+  projectPath: string
+  projectName: string
+  cmuxSurfaceId?: string
+  actionSource: ActionCenterSource
+  actionSourceLabel: string
+  actionTimestamp: number
+}
+
+interface ActionCenterProjectIdleItem {
+  actionKind: 'project_idle'
+  actionId: string
+  id: string
+  title: string
+  description: string
+  projectPath: string
+  projectName: string
+  actionSource: 'br'
+  actionSourceLabel: string
+  actionTimestamp: number
+}
+
+type ActionCenterItem = ActionCenterIssueItem | ActionCenterProjectIdleItem
+
+type ProjectIdleState = ActionCenterProjectIdleState
+type ProjectActionState = ActionCenterProjectActionState
+
+const actionSourceOrder: Record<ActionCenterSource, number> = {
+  br: 0,
+  github: 1,
+  other: 2,
+}
+
+const actionSourceLabel: Record<ActionCenterSource, string> = {
+  br: 'BR',
+  github: 'GitHub',
+  other: 'Outros',
+}
+
+const actionBadgeClass: Record<ActionCenterSource, string> = {
+  br: 'border-blue-500/40 text-blue-600 bg-blue-500/10',
+  github: 'border-violet-500/40 text-violet-600 bg-violet-500/10',
+  other: 'border-emerald-500/40 text-emerald-600 bg-emerald-500/10',
+}
+
+const inferActionSource = (issue: Issue): ActionCenterSource => {
+  if (issue.externalRef?.toLowerCase().includes('github.com')) return 'github'
+  if (issue.labels.some(label => label.toLowerCase().includes('github'))) return 'github'
+  return 'br'
+}
+
+const parseActionDate = (issue: Issue): number => {
+  for (const value of [issue.createdAt, issue.updatedAt]) {
+    const timestamp = Date.parse(value || '')
+    if (!Number.isNaN(timestamp)) return timestamp
+  }
+  return Number.MAX_SAFE_INTEGER
+}
+
+const getIssueCmuxSurfaceId = (issue: Pick<Issue, 'assignee'>) => {
+  const source = resolveTaskTerminalSource(issue)
+  return source.origin === 'external-cmux' ? source.surfaceId : undefined
+}
+
+const getProjectCmuxSurfaceId = (projectIssues: Issue[]) => {
+  return projectIssues
+    .map(issue => getIssueCmuxSurfaceId(issue))
+    .find(Boolean)
+}
+
+const normalizeProjectPath = normalizeActionCenterProjectPath
+const actionCenterNow = ref(Date.now())
+const projectIdleStates = ref<Record<string, ProjectIdleState>>({})
+const projectActionStates = ref<Record<string, ProjectActionState>>({})
+const dismissedActionCenterItems = useLocalStorage<Record<string, boolean>>('borabr:action-center:dismissed', {})
+const snoozedActionCenterItems = useLocalStorage<Record<string, number>>('borabr:action-center:snoozed', {})
+const isRefreshingProjectIdle = ref(false)
+let actionCenterProjectPollTimer: ReturnType<typeof setInterval> | null = null
+
+const readyActionItems = computed<ActionCenterIssueItem[]>(() => {
+  return Object.values(projectActionStates.value)
+    .filter(projectState => projectState.inProgressCount === 0)
+    .flatMap((projectState) => {
+      return projectState.readyIssues.map((issue) => {
+        const actionSource = inferActionSource(issue)
+        return {
+          ...issue,
+          actionKind: 'issue' as const,
+          actionId: `issue:${normalizeProjectPath(projectState.projectPath)}:${issue.id}:${issue.updatedAt}`,
+          projectPath: projectState.projectPath,
+          projectName: projectState.projectName,
+          cmuxSurfaceId: getIssueCmuxSurfaceId(issue) ?? projectState.cmuxSurfaceId,
+          actionSource,
+          actionSourceLabel: actionSourceLabel[actionSource],
+          actionTimestamp: parseActionDate(issue),
+        }
+      })
+    })
+})
+
+const projectIdleActionItems = computed<ActionCenterProjectIdleItem[]>(() => {
+  return Object.entries(projectIdleStates.value)
+    .filter(([, state]) => actionCenterNow.value - state.idleSince >= PROJECT_IDLE_THRESHOLD_MS)
+    .map(([key, state]) => ({
+      actionKind: 'project_idle' as const,
+      actionId: `project-idle:${key}:${state.idleSince}`,
+      id: `project-idle:${key}`,
+      title: `Projeto parado: ${state.projectName}`,
+      description: 'Sem tarefa em progresso ha mais de 5 minutos.',
+      projectPath: state.projectPath,
+      projectName: state.projectName,
+      actionSource: 'br',
+      actionSourceLabel: 'BR',
+      actionTimestamp: state.idleSince + PROJECT_IDLE_THRESHOLD_MS,
+    }))
+})
+
+const actionCenterItems = computed<ActionCenterItem[]>(() => {
+  return [...projectIdleActionItems.value, ...readyActionItems.value]
+    .filter((item) => {
+      if (dismissedActionCenterItems.value[item.actionId]) return false
+      const snoozedUntil = snoozedActionCenterItems.value[item.actionId]
+      return !snoozedUntil || snoozedUntil <= actionCenterNow.value
+    })
+    .sort((a, b) => {
+      if (a.actionTimestamp !== b.actionTimestamp) {
+        return a.actionTimestamp - b.actionTimestamp
+      }
+      if (actionSourceOrder[a.actionSource] !== actionSourceOrder[b.actionSource]) {
+        return actionSourceOrder[a.actionSource] - actionSourceOrder[b.actionSource]
+      }
+      return a.id.localeCompare(b.id)
+    })
+})
+
+const actionCenterCount = computed(() => actionCenterItems.value.length)
+
+const formatActionDate = (timestamp: number) => {
+  if (timestamp === Number.MAX_SAFE_INTEGER) return 'Data indisponível'
+  return new Date(timestamp).toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 // Check viewport size
 const checkViewport = () => {
@@ -261,6 +427,129 @@ const { start: startPolling, stop: stopPolling } = useAdaptivePolling(pollForCha
   watcherActive: changeDetectionActive,
 })
 
+const refreshProjectIdleNotifications = async () => {
+  actionCenterNow.value = Date.now()
+
+  if (!import.meta.client || !isBr.value || projects.value.length === 0 || isLoading.value || isUpdating.value || isSyncing.value || isRefreshingProjectIdle.value) {
+    if (!isBr.value || projects.value.length === 0) {
+      projectIdleStates.value = {}
+      projectActionStates.value = {}
+    }
+    return
+  }
+
+  isRefreshingProjectIdle.value = true
+
+  try {
+    const now = Date.now()
+    const nextStates: Record<string, ProjectIdleState> = {}
+    const nextActionStates: Record<string, ProjectActionState> = {}
+
+    for (const project of projects.value) {
+      const projectKey = normalizeProjectPath(project.path)
+
+      try {
+        const projectIssues = await bdList({ path: project.path, includeAll: true })
+        const hasInProgressWork = projectIssues.some(issue => issue.status === 'in_progress')
+        const projectReadyIssues = hasInProgressWork ? [] : await bdReady(project.path)
+        const actionState = buildActionCenterProjectActionState({
+          projectPath: project.path,
+          projectName: project.name,
+          projectIssues,
+          cmuxSurfaceId: getProjectCmuxSurfaceId(projectIssues),
+          readyIssues: projectReadyIssues,
+        })
+        nextActionStates[projectKey] = actionState
+
+        const idleState = buildActionCenterProjectIdleState({
+          projectPath: project.path,
+          projectName: project.name,
+          projectIssues,
+          fallbackTimestamp: now,
+          existingIdleSince: projectIdleStates.value[projectKey]?.idleSince,
+        })
+        if (idleState) {
+          nextStates[projectKey] = {
+            projectPath: project.path,
+            projectName: project.name,
+            idleSince: idleState.idleSince,
+          }
+        }
+      } catch {
+        // Ignore projects that cannot be read by br.
+      }
+    }
+
+    projectIdleStates.value = nextStates
+    projectActionStates.value = nextActionStates
+    actionCenterNow.value = now
+  } finally {
+    isRefreshingProjectIdle.value = false
+  }
+}
+
+const syncCurrentProjectActionState = () => {
+  actionCenterNow.value = Date.now()
+
+  if (!import.meta.client || !isBr.value || !beadsPath.value || projects.value.length === 0) {
+    return
+  }
+
+  const projectKey = normalizeProjectPath(beadsPath.value)
+  const project = projects.value.find(savedProject => normalizeProjectPath(savedProject.path) === projectKey)
+  if (!project) return
+
+  const actionState = buildActionCenterProjectActionState({
+    projectPath: project.path,
+    projectName: project.name,
+    projectIssues: issues.value,
+    cmuxSurfaceId: getProjectCmuxSurfaceId(issues.value),
+    readyIssues: readyIssues.value,
+  })
+
+  projectActionStates.value = {
+    ...projectActionStates.value,
+    [projectKey]: actionState,
+  }
+
+  const idleState = buildActionCenterProjectIdleState({
+    projectPath: project.path,
+    projectName: project.name,
+    projectIssues: issues.value,
+    fallbackTimestamp: actionCenterNow.value,
+    existingIdleSince: projectIdleStates.value[projectKey]?.idleSince,
+  })
+
+  if (idleState) {
+    projectIdleStates.value = {
+      ...projectIdleStates.value,
+      [projectKey]: idleState,
+    }
+    return
+  }
+
+  if (projectIdleStates.value[projectKey]) {
+    const nextStates = { ...projectIdleStates.value }
+    delete nextStates[projectKey]
+    projectIdleStates.value = nextStates
+  }
+}
+
+watch([issues, readyIssues, beadsPath, projects, isBr], syncCurrentProjectActionState, { deep: true, flush: 'post' })
+
+const startActionCenterProjectWatch = () => {
+  if (!import.meta.client || actionCenterProjectPollTimer) return
+  actionCenterProjectPollTimer = setInterval(refreshProjectIdleNotifications, ACTION_CENTER_PROJECT_POLL_MS)
+  setTimeout(refreshProjectIdleNotifications, 0)
+}
+
+const stopActionCenterProjectWatch = () => {
+  if (actionCenterProjectPollTimer) {
+    clearInterval(actionCenterProjectPollTimer)
+    actionCenterProjectPollTimer = null
+  }
+}
+
 onMounted(async () => {
   checkViewport()
   if (import.meta.client) {
@@ -310,7 +599,10 @@ onMounted(async () => {
       }
 
       // Sequential: bd commands can't run concurrently (Dolt SIGSEGV on parallel access)
-      fetchIssues().then(() => fetchStats(issues.value))
+      fetchIssues().then(async () => {
+        await fetchStats(issues.value)
+        startActionCenterProjectWatch()
+      })
     }
   }
 
@@ -324,6 +616,7 @@ onUnmounted(() => {
     stopListening()
     stopPolling()
     stopPeriodicCheck()
+    stopActionCenterProjectWatch()
     // Auto-unregister from probe (fire-and-forget)
     probeUnregisterProject(beadsPath.value)
   }
@@ -374,6 +667,74 @@ const handleRefresh = () => {
   window.location.reload()
 }
 
+const handleOpenActionCenter = () => {
+  if (isMobileView.value) {
+    mobilePanel.value = 'dashboard'
+  }
+  isActionCenterOpen.value = true
+}
+
+const handleCloseActionCenter = () => {
+  isActionCenterOpen.value = false
+}
+
+const handleDismissActionItem = (item: ActionCenterItem) => {
+  dismissedActionCenterItems.value = {
+    ...dismissedActionCenterItems.value,
+    [item.actionId]: true,
+  }
+}
+
+const handleSnoozeActionItem = (item: ActionCenterItem) => {
+  snoozedActionCenterItems.value = {
+    ...snoozedActionCenterItems.value,
+    [item.actionId]: Date.now() + 10 * 60 * 1000,
+  }
+  actionCenterNow.value = Date.now()
+}
+
+const buildActionCenterCmuxPrompt = (item: ActionCenterIssueItem) => {
+  return `Continuar a tarefa ${item.id} usando a skill BR`
+}
+
+const handleRunActionItemInCmux = async (item: ActionCenterItem) => {
+  if (item.actionKind !== 'issue') return
+
+  actionCenterTerminalError.value = ''
+  actionCenterTerminalErrorItemId.value = item.actionId
+  if (!item.cmuxSurfaceId) {
+    actionCenterTerminalError.value = 'Essa tarefa ainda nao tem CMUX associado. Pegue pelo fluxo de Sign-in/CMUX.'
+    return
+  }
+
+  try {
+    await cmuxFocusSurface(item.cmuxSurfaceId)
+    await cmuxSendPrompt(item.cmuxSurfaceId, buildActionCenterCmuxPrompt(item))
+    notifySuccess('Prompt enviado ao CMUX')
+  } catch (error) {
+    actionCenterTerminalError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+const handleTakeActionItem = async (item: ActionCenterItem) => {
+  handleCloseActionCenter()
+  if (item.actionKind === 'project_idle') {
+    if (isMobileView.value) {
+      mobilePanel.value = 'issues'
+    }
+    if (normalizeProjectPath(beadsPath.value || '') !== normalizeProjectPath(item.projectPath)) {
+      setPath(item.projectPath)
+      await handlePathChange()
+    }
+    return
+  }
+  if (normalizeProjectPath(beadsPath.value || '') !== normalizeProjectPath(item.projectPath)) {
+    setPath(item.projectPath)
+    await handlePathChange()
+  }
+  await handleSelectIssue(item)
+}
+
 const handleRepair = async () => {
   const success = await repairDatabase()
   if (success) {
@@ -415,6 +776,7 @@ const handleMigrateToDolt = async () => {
     // Reload data after migration
     await fetchIssues()
     await fetchStats(issues.value)
+    startActionCenterProjectWatch()
   }
 }
 
@@ -448,6 +810,7 @@ const handlePathChange = async () => {
   selectIssue(null)
   isEditMode.value = false
   isCreatingNew.value = false
+  isActionCenterOpen.value = false
   clearIssues()  // Reset issue list so new-issue detection doesn't flash all rows
   clearStats()   // Reset stats so previous project's ready work doesn't persist
 
@@ -520,6 +883,8 @@ const handleReset = () => {
   clearStats()
   isEditMode.value = false
   isCreatingNew.value = false
+  isActionCenterOpen.value = false
+  projectIdleStates.value = {}
 }
 
 const handleAddIssue = () => {
@@ -838,6 +1203,18 @@ watch(
           <!-- Top section (fixed content) -->
           <div class="p-4 space-y-4 shrink-0">
             <PathSelector v-if="!showOnboarding" ref="pathSelectorRef" :is-loading="isLoading" @change="handlePathChange" @reset="handleReset" />
+            <Button
+              variant="outline"
+              class="w-full h-12 justify-between border-primary/30 bg-primary/5"
+              :class="{ 'border-primary/50 bg-primary/10 text-primary': isActionCenterOpen }"
+              @click="handleOpenActionCenter"
+            >
+              <span class="flex items-center gap-2">
+                <Bell class="h-4 w-4" />
+                Action Center
+              </span>
+              <span class="text-[11px] px-2 py-0.5 rounded-full bg-muted border">{{ actionCenterCount }}</span>
+            </Button>
 
             <div v-if="stats" class="space-y-4 mt-6">
               <div class="grid grid-cols-5 gap-1.5">
@@ -896,58 +1273,149 @@ watch(
 
         <!-- Normal: Issues Toolbar + Table -->
         <template v-else>
-          <IssueListPanel
-            v-model:search="searchValue"
-            v-model:selected-ids="selectedIds"
-            :filters="{ status: filters.status, type: filters.type, priority: filters.priority, labels: filters.labels, assignee: filters.assignee }"
-            :available-labels="availableLabels"
-            :available-assignees="availableAssignees"
-            :has-selection="multiSelectMode ? selectedIds.length > 0 : !!selectedIssue"
-            :multi-select-mode="multiSelectMode"
-            :selected-count="selectedIds.length"
-            :columns="columns"
-            :is-search-active="isSearchActive"
-            :issues="paginatedIssues"
-            :grouped-issues="groupedIssues"
-            :selected-id="selectedIssue?.id"
-            :has-more="hasMore"
-            :total-count="filteredIssues.length"
-            :sort-field="sortField"
-            :sort-direction="sortDirection"
-            :newly-added-ids="newlyAddedIds"
-            :pinned-ids="pinnedIssueIds"
-            :terminal-project-path="beadsPath"
-            :terminal-project-name="currentProjectName"
-            task-terminals-enabled
-            @add="handleAddIssue"
-            @delete="handleDeleteIssue"
-            @toggle-multi-select="toggleMultiSelect"
-            @update:columns="setColumns"
-            @reset-columns="resetColumns"
-            @toggle-status="toggleStatus"
-            @toggle-type="toggleType"
-            @toggle-priority="togglePriority"
-            @toggle-label="toggleLabelFilter"
-            @toggle-assignee="toggleAssignee"
-            @remove-label="handleRemoveLabelFilter"
-            @clear-filters="clearFilters"
-            @select="handleSelectIssue"
-            @edit="handleEditIssueFromTable"
-            @deselect="handleDeselectIssue"
-            @load-more="loadMore"
-            @sort="setSort"
-            @toggle-pin="togglePin"
-          />
+          <template v-if="isActionCenterOpen">
+            <div class="flex h-full flex-col">
+              <div class="px-4 py-3 border-b border-border flex items-center justify-between gap-3">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="gap-2 text-xs"
+                  @click="handleCloseActionCenter"
+                >
+                  <ArrowLeft class="h-3.5 w-3.5" />
+                  Voltar ao quadro
+                </Button>
+                <span class="text-xs text-muted-foreground">{{ actionCenterCount }} pendente(s)</span>
+              </div>
+              <ScrollArea class="flex-1">
+                <div class="p-4">
+                  <div class="space-y-4">
+                    <div class="flex items-center gap-2">
+                      <Bell class="h-3.5 w-3.5 text-muted-foreground" />
+                      <div>
+                        <h3 class="text-lg font-semibold leading-tight">Action Center</h3>
+                        <p class="text-xs text-muted-foreground">Ações agregadas de todos os projetos salvos em ordem FIFO.</p>
+                      </div>
+                    </div>
+                    <div v-if="isRefreshingProjectIdle && actionCenterItems.length === 0" class="text-sm text-muted-foreground py-8 text-center">
+                      Carregando ações...
+                    </div>
+                    <div v-else-if="actionCenterItems.length === 0" class="text-sm text-muted-foreground py-8 text-center">
+                      Sem ações pendentes.
+                    </div>
+                    <template v-else>
+                      <div
+                        v-for="(action, index) in actionCenterItems"
+                        :key="action.actionId"
+                        class="w-full rounded-md border border-border bg-card p-3 text-left"
+                      >
+                        <div class="flex items-start gap-3">
+                          <div
+                            class="mt-0.5 h-8 w-8 rounded-full border bg-background flex items-center justify-center text-xs font-semibold"
+                            :class="actionBadgeClass[action.actionSource]"
+                          >
+                            {{ action.actionSourceLabel.charAt(0) }}
+                          </div>
+                          <div class="flex-1 min-w-0">
+                            <div class="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                              <span class="inline-flex rounded-full border px-2 py-0.5" :class="actionBadgeClass[action.actionSource]">
+                                {{ action.actionSourceLabel }}
+                              </span>
+                              <span>{{ action.projectName }}</span>
+                              <span>{{ formatActionDate(action.actionTimestamp) }}</span>
+                              <span>#{{ index + 1 }}</span>
+                            </div>
+                            <p class="mt-1 text-sm leading-tight font-medium line-clamp-2">{{ action.title }}</p>
+                            <p v-if="action.description" class="mt-1 text-xs text-muted-foreground line-clamp-2">
+                              {{ action.description }}
+                            </p>
+                            <div class="mt-3 flex flex-wrap gap-2">
+                              <Button size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
+                                {{ action.actionKind === 'project_idle' ? 'Abrir projeto' : 'Abrir tarefa' }}
+                              </Button>
+                              <Button
+                                v-if="action.actionKind === 'issue'"
+                                variant="secondary"
+                                size="sm"
+                                class="h-7 text-xs"
+                                @click="handleRunActionItemInCmux(action)"
+                              >
+                                <SquareTerminal class="h-3.5 w-3.5" />
+                                Rodar no CMUX
+                              </Button>
+                              <Button variant="outline" size="sm" class="h-7 text-xs" @click="handleSnoozeActionItem(action)">
+                                Daqui 10 min
+                              </Button>
+                              <Button variant="ghost" size="sm" class="h-7 text-xs" @click="handleDismissActionItem(action)">
+                                Ignorar
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                        <p v-if="action.actionKind === 'issue' && actionCenterTerminalErrorItemId === action.actionId && actionCenterTerminalError" class="mt-2 text-xs text-destructive">
+                          {{ actionCenterTerminalError }}
+                        </p>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </ScrollArea>
+            </div>
+          </template>
+          <template v-else>
+            <IssueListPanel
+              v-model:search="searchValue"
+              v-model:selected-ids="selectedIds"
+              :filters="{ status: filters.status, type: filters.type, priority: filters.priority, labels: filters.labels, assignee: filters.assignee }"
+              :available-labels="availableLabels"
+              :available-assignees="availableAssignees"
+              :has-selection="multiSelectMode ? selectedIds.length > 0 : !!selectedIssue"
+              :multi-select-mode="multiSelectMode"
+              :selected-count="selectedIds.length"
+              :columns="columns"
+              :is-search-active="isSearchActive"
+              :issues="paginatedIssues"
+              :grouped-issues="groupedIssues"
+              :selected-id="selectedIssue?.id"
+              :has-more="hasMore"
+              :total-count="filteredIssues.length"
+              :sort-field="sortField"
+              :sort-direction="sortDirection"
+              :newly-added-ids="newlyAddedIds"
+              :pinned-ids="pinnedIssueIds"
+              :terminal-project-path="beadsPath"
+              :terminal-project-name="currentProjectName"
+              task-terminals-enabled
+              @add="handleAddIssue"
+              @delete="handleDeleteIssue"
+              @toggle-multi-select="toggleMultiSelect"
+              @update:columns="setColumns"
+              @reset-columns="resetColumns"
+              @toggle-status="toggleStatus"
+              @toggle-type="toggleType"
+              @toggle-priority="togglePriority"
+              @toggle-label="toggleLabelFilter"
+              @toggle-assignee="toggleAssignee"
+              @remove-label="handleRemoveLabelFilter"
+              @clear-filters="clearFilters"
+              @select="handleSelectIssue"
+              @edit="handleEditIssueFromTable"
+              @deselect="handleDeselectIssue"
+              @load-more="loadMore"
+              @sort="setSort"
+              @toggle-pin="togglePin"
+            />
 
-          <div v-if="isLoading" class="text-center text-muted-foreground py-4">
-            Loading...
-          </div>
+            <div v-if="isLoading" class="text-center text-muted-foreground py-4">
+              Loading...
+            </div>
 
-          <TerminalPanel
-            :project-path="beadsPath"
-            :project-name="currentProjectName"
-            :selected-issue="selectedIssue"
-          />
+            <TerminalPanel
+              :project-path="beadsPath"
+              :project-name="currentProjectName"
+              :selected-issue="selectedIssue"
+            />
+          </template>
         </template>
       </main>
 
@@ -1099,25 +1567,121 @@ watch(
       <ScrollArea v-if="mobilePanel === 'dashboard'" class="flex-1">
         <div class="p-4 space-y-6">
           <PathSelector v-if="!showOnboarding" ref="mobilePathSelectorRef" :is-loading="isLoading" @change="handlePathChange" @reset="handleReset" />
+          <Button
+            v-if="!showOnboarding"
+            variant="outline"
+            class="w-full h-12 justify-between border-primary/30 bg-primary/5"
+            :class="{ 'border-primary/50 bg-primary/10 text-primary': isActionCenterOpen }"
+            @click="handleOpenActionCenter"
+          >
+            <span class="flex items-center gap-2">
+              <Bell class="h-4 w-4" />
+              Action Center
+            </span>
+            <span class="text-[11px] px-2 py-0.5 rounded-full bg-muted border">{{ actionCenterCount }}</span>
+          </Button>
 
-          <DashboardContent
-            class="space-y-6"
-            :stats="stats"
-            :ready-issues="readyIssues"
-            :in-progress-issues="inProgressIssues"
-            :pinned-issues="pinnedIssuesList"
-            :pinned-sort-mode="pinnedSortMode"
-            :kpi-grid-cols="2"
-            :active-kpi-filter="activeKpiFilter"
-            :status-filters="filters.status"
-            :show-onboarding="showOnboarding"
-            @select-issue="handleSelectIssue"
-            @kpi-click="handleKpiClick"
-            @reorder-pinned="reorderPinned"
-            @unpin="togglePin"
-            @toggle-pinned-sort="togglePinnedSort"
-            @browse="openFolderPicker"
-          />
+          <template v-if="isActionCenterOpen">
+              <div class="flex items-center justify-between">
+                <Button variant="ghost" size="sm" class="gap-2 text-xs" @click="handleCloseActionCenter">
+                  <ArrowLeft class="h-3.5 w-3.5" />
+                  Voltar ao quadro
+                </Button>
+                <span class="text-xs text-muted-foreground">{{ actionCenterCount }} pendente(s)</span>
+              </div>
+              <div class="space-y-4">
+                <div class="flex items-center gap-2">
+                  <Bell class="h-3.5 w-3.5 text-muted-foreground" />
+                  <div>
+                    <h3 class="text-lg font-semibold leading-tight">Action Center</h3>
+                    <p class="text-xs text-muted-foreground">Ações agregadas de todos os projetos salvos em ordem FIFO.</p>
+                  </div>
+                </div>
+                <div v-if="isRefreshingProjectIdle && actionCenterItems.length === 0" class="text-sm text-muted-foreground py-8 text-center">
+                  Carregando ações...
+                </div>
+                <div v-else-if="actionCenterItems.length === 0" class="text-sm text-muted-foreground py-8 text-center">
+                  Sem ações pendentes.
+                </div>
+                <template v-else>
+                  <div
+                    v-for="(action, index) in actionCenterItems"
+                    :key="action.actionId"
+                    class="w-full rounded-md border border-border bg-card p-3 text-left"
+                  >
+                    <div class="flex items-start gap-3">
+                      <div
+                        class="mt-0.5 h-8 w-8 rounded-full border bg-background flex items-center justify-center text-xs font-semibold"
+                        :class="actionBadgeClass[action.actionSource]"
+                      >
+                        {{ action.actionSourceLabel.charAt(0) }}
+                      </div>
+                      <div class="flex-1 min-w-0">
+                        <div class="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                          <span class="inline-flex rounded-full border px-2 py-0.5" :class="actionBadgeClass[action.actionSource]">
+                            {{ action.actionSourceLabel }}
+                          </span>
+                          <span>{{ action.projectName }}</span>
+                          <span>{{ formatActionDate(action.actionTimestamp) }}</span>
+                          <span>#{{ index + 1 }}</span>
+                        </div>
+                        <p class="mt-1 text-sm leading-tight font-medium line-clamp-2">{{ action.title }}</p>
+                        <p v-if="action.description" class="mt-1 text-xs text-muted-foreground line-clamp-2">
+                          {{ action.description }}
+                        </p>
+                        <div class="mt-3 flex flex-wrap gap-2">
+                          <Button size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
+                            {{ action.actionKind === 'project_idle' ? 'Abrir projeto' : 'Abrir tarefa' }}
+                          </Button>
+                          <Button
+                            v-if="action.actionKind === 'issue'"
+                            variant="secondary"
+                            size="sm"
+                            class="h-7 text-xs"
+                            @click="handleRunActionItemInCmux(action)"
+                          >
+                            <SquareTerminal class="h-3.5 w-3.5" />
+                            Rodar no CMUX
+                          </Button>
+                          <Button variant="outline" size="sm" class="h-7 text-xs" @click="handleSnoozeActionItem(action)">
+                            Daqui 10 min
+                          </Button>
+                          <Button variant="ghost" size="sm" class="h-7 text-xs" @click="handleDismissActionItem(action)">
+                            Ignorar
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                    <p v-if="action.actionKind === 'issue' && actionCenterTerminalErrorItemId === action.actionId && actionCenterTerminalError" class="mt-2 text-xs text-destructive">
+                      {{ actionCenterTerminalError }}
+                    </p>
+                  </div>
+                </template>
+              </div>
+          </template>
+          <template v-else>
+              <DashboardContent
+                v-if="stats"
+                class="space-y-6"
+                :stats="stats"
+                :ready-issues="readyIssues"
+                :in-progress-issues="inProgressIssues"
+                :pinned-issues="pinnedIssuesList"
+                :pinned-sort-mode="pinnedSortMode"
+                :kpi-grid-cols="2"
+                :active-kpi-filter="activeKpiFilter"
+                :status-filters="filters.status"
+                :show-onboarding="showOnboarding"
+                @select-issue="handleSelectIssue"
+                @kpi-click="handleKpiClick"
+                @reorder-pinned="reorderPinned"
+                @unpin="togglePin"
+                @toggle-pinned-sort="togglePinnedSort"
+                @browse="openFolderPicker"
+              />
+              <OnboardingCard v-else-if="showOnboarding" @browse="openFolderPicker" />
+              <span v-else class="text-muted-foreground text-sm">Loading...</span>
+          </template>
         </div>
       </ScrollArea>
 

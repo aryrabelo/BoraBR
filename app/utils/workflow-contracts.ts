@@ -39,6 +39,10 @@ export interface ResolveWorkflowContractOptions {
 }
 
 const WORKFLOW_LABEL_PREFIX = 'workflow:'
+const TYPE_WORKFLOW_IDS: Record<string, string> = {
+  bug: 'bug-investigation',
+  plan: 'planning-approval',
+}
 const VALID_CHECK_STATES = new Set<WorkflowCheckResult['kind']>([
   'uninitialized',
   'steps_missing',
@@ -70,9 +74,22 @@ export function detectWorkflowContractLabels(labels: string[], source: WorkflowC
     }))
 }
 
+function detectTypeWorkflowContract(issue: Issue): WorkflowContract[] {
+  const issueType = issue.type?.toLowerCase()
+  const workflowId = issueType ? TYPE_WORKFLOW_IDS[issueType] : undefined
+  return workflowId
+    ? [{
+        id: workflowId,
+        label: `workflow:${workflowId}`,
+        source: 'project',
+      }]
+    : []
+}
+
 export function detectWorkflowContracts(issue: Issue, options: ResolveWorkflowContractOptions = {}): WorkflowContract[] {
   return [
     ...detectWorkflowContractLabels(issue.labels ?? [], 'issue'),
+    ...detectTypeWorkflowContract(issue),
     ...detectWorkflowContractLabels(options.inheritedLabels ?? [], 'inherited'),
     ...detectWorkflowContractLabels(options.projectLabels ?? [], 'project'),
   ]
@@ -96,16 +113,34 @@ function stringArrayValue(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
 }
 
+function workflowIdFromWorkflows(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined
+  const firstWorkflow = value.find((item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item))
+  return firstWorkflow ? stringValue(firstWorkflow.id) : undefined
+}
+
+function normalizeWorkflowCheckKind(rawState: string): WorkflowCheckResult['kind'] | null {
+  if (rawState === 'no_workflow') return null
+  if (rawState === 'steps_incomplete') return 'step_running'
+  if (rawState === 'gates_missing') return 'blocked'
+  if (VALID_CHECK_STATES.has(rawState as WorkflowCheckResult['kind'])) {
+    return rawState as WorkflowCheckResult['kind']
+  }
+  return null
+}
+
 export function parseWorkflowCheckOutput(input: string | Record<string, unknown>): WorkflowCheckResult | null {
   const parsed = parseJsonObject(input)
   if (!parsed) return null
 
   const rawState = stringValue(parsed.state) ?? stringValue(parsed.kind) ?? stringValue(parsed.status)
-  if (!rawState || !VALID_CHECK_STATES.has(rawState as WorkflowCheckResult['kind'])) return null
+  if (!rawState) return null
+  const kind = normalizeWorkflowCheckKind(rawState)
+  if (!kind) return null
 
   return {
-    kind: rawState as WorkflowCheckResult['kind'],
-    workflowId: stringValue(parsed.workflow_id) ?? stringValue(parsed.workflowId),
+    kind,
+    workflowId: stringValue(parsed.workflow_id) ?? stringValue(parsed.workflowId) ?? workflowIdFromWorkflows(parsed.workflows),
     nextCommands: stringArrayValue(parsed.next_commands).concat(stringArrayValue(parsed.nextCommands)),
   }
 }
@@ -131,7 +166,7 @@ export function resolveWorkflowContractState(issue: Issue, options: ResolveWorkf
       workflowId: contracts[0]?.id,
       contracts,
       nextCommands: [`br workflow check ${issue.id}`],
-      inferredPolicy: false,
+      inferredPolicy: contracts.some(contract => contract.source === 'project'),
     }
   }
 

@@ -4,6 +4,7 @@ export interface TerminalHelperIssue {
   id: string
   title?: string
   status?: string
+  type?: string
   labels?: string[]
 }
 
@@ -16,6 +17,23 @@ export interface TerminalHelperCommand {
 
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`
+}
+
+function buildStartCommand(issueId: string): string {
+  const id = shellQuote(issueId)
+
+  const claimCommand = [
+    'ACTOR="${BR_ACTOR:-assistant}"',
+    'SURFACE_ID="${CMUX_SURFACE_ID:-${CANIX_PANEL_ID:-${CMUX_PANEL_ID:-}}}"',
+    'if [ -n "$SURFACE_ID" ]; then',
+    `  ASSIGNEE="cmux:${'$'}{SURFACE_ID}"`,
+    `  br update --actor "$ACTOR" ${id} --status in_progress --assignee "$ASSIGNEE" --json`,
+    'else',
+    `  br update --actor "$ACTOR" ${id} --status in_progress --claim --json`,
+    'fi',
+  ].join(' && ')
+
+  return claimCommand
 }
 
 export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null): TerminalHelperCommand[] {
@@ -43,6 +61,7 @@ export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null):
   if (!issue?.id) return projectCommands
 
   const hasWorkflowContract = detectWorkflowContractLabels(issue.labels ?? []).length > 0
+    || ['bug', 'plan'].includes(issue.type?.toLowerCase() ?? '')
 
   const workflowCommands: TerminalHelperCommand[] = hasWorkflowContract
     ? [
@@ -84,7 +103,7 @@ export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null):
     {
       id: 'start',
       label: 'Start',
-      command: `br update ${issue.id} --status in_progress`,
+      command: buildStartCommand(issue.id),
       title: 'Mark selected issue in progress',
     },
     {
