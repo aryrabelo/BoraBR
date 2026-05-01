@@ -366,6 +366,14 @@ pub struct ProjectWorktree {
     pub is_root: bool,
     #[serde(rename = "inclusionReason")]
     pub inclusion_reason: String,
+    #[serde(rename = "lastActivityAt")]
+    pub last_activity_at: Option<u64>,
+    #[serde(rename = "lastActivitySource")]
+    pub last_activity_source: Option<String>,
+    #[serde(rename = "activityScanLimited")]
+    pub activity_scan_limited: bool,
+    #[serde(rename = "recentActivityRank")]
+    pub recent_activity_rank: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -386,6 +394,10 @@ struct ProjectWorktreeCandidate {
     repo_remote: Option<String>,
     is_root: bool,
     inclusion_reason: String,
+    last_activity_at: Option<u64>,
+    last_activity_source: Option<String>,
+    activity_scan_limited: bool,
+    recent_activity_rank: Option<usize>,
 }
 
 // ============================================================================
@@ -3795,6 +3807,130 @@ fn git_head(cwd: &std::path::Path) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+const WORKTREE_ACTIVITY_SCAN_MAX_ENTRIES: usize = 5_000;
+const WORKTREE_ACTIVITY_SCAN_MAX_MS: u64 = 150;
+const RECENT_ACTIVITY_WORKTREE_LIMIT: usize = 5;
+
+fn system_time_epoch_millis(time: std::time::SystemTime) -> Option<u64> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+}
+
+fn is_ignored_worktree_activity_dir(name: &str) -> bool {
+    matches!(
+        name,
+        ".git"
+            | "node_modules"
+            | "dist"
+            | "build"
+            | "target"
+            | ".next"
+            | ".nuxt"
+            | ".output"
+            | ".cache"
+            | ".turbo"
+            | "coverage"
+            | "vendor"
+            | "tmp"
+            | "temp"
+    )
+}
+
+fn newest_relevant_file_activity(path: &std::path::Path) -> (Option<u64>, bool) {
+    let started = Instant::now();
+    let mut scanned_entries = 0usize;
+    let mut limited = false;
+    let mut newest: Option<u64> = None;
+    let mut stack = vec![path.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        if scanned_entries >= WORKTREE_ACTIVITY_SCAN_MAX_ENTRIES
+            || started.elapsed() >= Duration::from_millis(WORKTREE_ACTIVITY_SCAN_MAX_MS)
+        {
+            limited = true;
+            break;
+        }
+
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            if scanned_entries >= WORKTREE_ACTIVITY_SCAN_MAX_ENTRIES
+                || started.elapsed() >= Duration::from_millis(WORKTREE_ACTIVITY_SCAN_MAX_MS)
+            {
+                limited = true;
+                break;
+            }
+
+            scanned_entries += 1;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == ".git" {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+
+            if file_type.is_dir() {
+                if !is_ignored_worktree_activity_dir(&name) {
+                    stack.push(entry.path());
+                }
+                continue;
+            }
+
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(system_time_epoch_millis);
+
+            if let Some(timestamp) = modified {
+                newest = Some(newest.map_or(timestamp, |current| current.max(timestamp)));
+            }
+        }
+    }
+
+    (newest, limited)
+}
+
+fn git_head_timestamp_millis(cwd: &std::path::Path) -> Option<u64> {
+    run_git(cwd, &["log", "-1", "--format=%ct", "HEAD"])
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .and_then(|seconds| seconds.checked_mul(1_000))
+}
+
+fn git_metadata_timestamp_millis(cwd: &std::path::Path) -> Option<u64> {
+    fs::metadata(cwd.join(".git"))
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(system_time_epoch_millis)
+}
+
+fn resolve_worktree_activity(path: &std::path::Path) -> (Option<u64>, Option<String>, bool) {
+    let (file_activity, limited) = newest_relevant_file_activity(path);
+    if let Some(timestamp) = file_activity {
+        return (Some(timestamp), Some("file-mtime".to_string()), limited);
+    }
+
+    if let Some(timestamp) = git_head_timestamp_millis(path) {
+        return (Some(timestamp), Some("git-head".to_string()), limited);
+    }
+
+    let git_metadata_activity = git_metadata_timestamp_millis(path);
+    (
+        git_metadata_activity,
+        git_metadata_activity.map(|_| "git-metadata".to_string()),
+        limited,
+    )
+}
+
 fn candidate_from_path(
     root_path: &str,
     path: &std::path::Path,
@@ -3818,6 +3954,10 @@ fn candidate_from_path(
         repo_remote,
         is_root: canonical_string == root_path,
         inclusion_reason: inclusion_reason.to_string(),
+        last_activity_at: None,
+        last_activity_source: None,
+        activity_scan_limited: false,
+        recent_activity_rank: None,
     })
 }
 
@@ -3887,6 +4027,45 @@ fn dedupe_project_worktree_candidates(candidates: Vec<ProjectWorktreeCandidate>)
     deduped
 }
 
+fn apply_worktree_activity(candidates: &mut [ProjectWorktreeCandidate]) {
+    for candidate in candidates {
+        let path = PathBuf::from(&candidate.canonical_path);
+        let (last_activity_at, last_activity_source, activity_scan_limited) =
+            resolve_worktree_activity(&path);
+        candidate.last_activity_at = last_activity_at;
+        candidate.last_activity_source = last_activity_source;
+        candidate.activity_scan_limited = activity_scan_limited;
+    }
+}
+
+fn assign_recent_activity_ranks(
+    candidates: &mut [ProjectWorktreeCandidate],
+    limit: usize,
+    promoted_canonical_paths: &HashSet<String>,
+) {
+    for candidate in candidates.iter_mut() {
+        candidate.recent_activity_rank = None;
+    }
+
+    let mut ranked: Vec<(usize, u64, String)> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| !candidate.is_root)
+        .filter(|(_, candidate)| !promoted_canonical_paths.contains(&candidate.canonical_path))
+        .filter_map(|(index, candidate)| {
+            candidate
+                .last_activity_at
+                .map(|timestamp| (index, timestamp, candidate.canonical_path.clone()))
+        })
+        .collect();
+
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+
+    for (rank, (index, _, _)) in ranked.into_iter().take(limit).enumerate() {
+        candidates[index].recent_activity_rank = Some(rank + 1);
+    }
+}
+
 impl From<ProjectWorktreeCandidate> for ProjectWorktree {
     fn from(candidate: ProjectWorktreeCandidate) -> Self {
         Self {
@@ -3898,6 +4077,10 @@ impl From<ProjectWorktreeCandidate> for ProjectWorktree {
             repo_remote: candidate.repo_remote,
             is_root: candidate.is_root,
             inclusion_reason: candidate.inclusion_reason,
+            last_activity_at: candidate.last_activity_at,
+            last_activity_source: candidate.last_activity_source,
+            activity_scan_limited: candidate.activity_scan_limited,
+            recent_activity_rank: candidate.recent_activity_rank,
         }
     }
 }
@@ -3939,10 +4122,15 @@ async fn discover_project_worktrees(project_path: String) -> Result<Vec<ProjectW
         candidates.extend(scan_github_worktrees_dir(&root_path, remote, &root_remote_key));
     }
 
-    Ok(dedupe_project_worktree_candidates(candidates)
-        .into_iter()
-        .map(ProjectWorktree::from)
-        .collect())
+    let mut candidates = dedupe_project_worktree_candidates(candidates);
+    apply_worktree_activity(&mut candidates);
+    assign_recent_activity_ranks(
+        &mut candidates,
+        RECENT_ACTIVITY_WORKTREE_LIMIT,
+        &HashSet::new(),
+    );
+
+    Ok(candidates.into_iter().map(ProjectWorktree::from).collect())
 }
 
 #[tauri::command]
@@ -6093,6 +6281,10 @@ prunable gitdir file points to non-existent location
                 repo_remote: Some("git@github.com:entrc/entrc-backend.git".to_string()),
                 is_root: path == "/repos/app",
                 inclusion_reason: reason.to_string(),
+                last_activity_at: None,
+                last_activity_source: None,
+                activity_scan_limited: false,
+                recent_activity_rank: None,
             }
         }
 
@@ -6109,6 +6301,94 @@ prunable gitdir file points to non-existent location
 
         let paths: Vec<&str> = deduped.iter().map(|item| item.canonical_path.as_str()).collect();
         assert_eq!(paths, vec!["/repos/app", "/worktrees/feature-a", "/worktrees/feature-b"]);
+    }
+
+    #[test]
+    fn worktree_activity_scan_ignores_generated_directories() {
+        for ignored in [
+            ".git",
+            "node_modules",
+            "dist",
+            "build",
+            "target",
+            ".next",
+            ".nuxt",
+            ".output",
+            ".cache",
+            ".turbo",
+            "coverage",
+            "vendor",
+        ] {
+            assert!(is_ignored_worktree_activity_dir(ignored), "{ignored} should be ignored");
+        }
+
+        assert!(!is_ignored_worktree_activity_dir("src"));
+        assert!(!is_ignored_worktree_activity_dir("docs"));
+    }
+
+    #[test]
+    fn worktree_activity_scan_ignores_git_file_entries() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("borabr-worktree-activity-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(".git"), "gitdir: /tmp/repo/.git/worktrees/example").unwrap();
+
+        let (activity, limited) = newest_relevant_file_activity(&dir);
+
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(activity, None);
+        assert!(!limited);
+    }
+
+    #[test]
+    fn recent_activity_ranking_takes_top_five_and_skips_root_and_promoted() {
+        fn candidate(path: &str, is_root: bool, last_activity_at: Option<u64>) -> ProjectWorktreeCandidate {
+            ProjectWorktreeCandidate {
+                root_path: "/repos/app".to_string(),
+                worktree_path: path.to_string(),
+                canonical_path: path.to_string(),
+                branch: None,
+                head: None,
+                repo_remote: Some("git@github.com:entrc/entrc-backend.git".to_string()),
+                is_root,
+                inclusion_reason: "git-worktree-list".to_string(),
+                last_activity_at,
+                last_activity_source: last_activity_at.map(|_| "file-mtime".to_string()),
+                activity_scan_limited: false,
+                recent_activity_rank: None,
+            }
+        }
+
+        let mut candidates = vec![
+            candidate("/repos/app", true, Some(9_000)),
+            candidate("/worktrees/promoted", false, Some(8_000)),
+            candidate("/worktrees/b", false, Some(7_000)),
+            candidate("/worktrees/c", false, Some(6_000)),
+            candidate("/worktrees/d", false, Some(5_000)),
+            candidate("/worktrees/e", false, Some(4_000)),
+            candidate("/worktrees/f", false, Some(3_000)),
+            candidate("/worktrees/g", false, Some(2_000)),
+        ];
+        let promoted = HashSet::from(["/worktrees/promoted".to_string()]);
+
+        assign_recent_activity_ranks(&mut candidates, 5, &promoted);
+
+        let ranks: HashMap<&str, Option<usize>> = candidates
+            .iter()
+            .map(|candidate| (candidate.canonical_path.as_str(), candidate.recent_activity_rank))
+            .collect();
+
+        assert_eq!(ranks["/repos/app"], None);
+        assert_eq!(ranks["/worktrees/promoted"], None);
+        assert_eq!(ranks["/worktrees/b"], Some(1));
+        assert_eq!(ranks["/worktrees/c"], Some(2));
+        assert_eq!(ranks["/worktrees/d"], Some(3));
+        assert_eq!(ranks["/worktrees/e"], Some(4));
+        assert_eq!(ranks["/worktrees/f"], Some(5));
+        assert_eq!(ranks["/worktrees/g"], None);
     }
 
     #[test]

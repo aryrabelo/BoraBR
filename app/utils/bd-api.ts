@@ -37,6 +37,10 @@ export interface ProjectWorktree {
   repoRemote?: string | null
   isRoot: boolean
   inclusionReason: 'git-worktree-list' | 'worktrees-directory-scan' | string
+  lastActivityAt?: number | null
+  lastActivitySource?: 'file-mtime' | 'git-head' | 'git-metadata' | string | null
+  activityScanLimited: boolean
+  recentActivityRank?: number | null
 }
 
 // Type declarations for Tauri detection

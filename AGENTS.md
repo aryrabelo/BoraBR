@@ -35,6 +35,7 @@ br sync               # Sync with git
 
 ## Critical rules
 
+- NEVER start implementation for a Beads issue before marking it `in_progress` with `br update <id> --status in_progress`
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
@@ -112,7 +113,7 @@ br sync --flush-only  # Export DB to JSONL
 ### Workflow Pattern
 
 1. **Triage**: Run `bv --robot-triage` to find the highest-impact actionable work
-2. **Claim**: Use `br update <id> --status=in_progress`
+2. **Claim before work**: Use `br update <id> --status=in_progress` before reading or editing implementation files for that issue
 3. **Work**: Implement the task
 4. **Complete**: Use `br close <id>`
 5. **Sync**: Always run `br sync --flush-only` at session end
