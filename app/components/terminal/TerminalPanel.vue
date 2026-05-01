@@ -29,6 +29,7 @@ import {
 } from '~/utils/terminal-api'
 import { TERMINAL_PANEL_MAX_HEIGHT, TERMINAL_PANEL_MIN_HEIGHT, useTerminalPanel } from '~/composables/useTerminalPanel'
 import { resolveTerminalRenderer, type TerminalRendererTarget } from '~/utils/terminal-renderer'
+import { buildTerminalHelperCommands, type TerminalHelperCommand } from '~/utils/terminal-helpers'
 
 const props = defineProps<{
   projectPath: string
@@ -45,6 +46,7 @@ const emit = defineEmits<{
 
 const panel = useTerminalPanel({ initialOpen: props.mode === 'inline' })
 const outputRef = ref<HTMLElement | null>(null)
+const commandInputRef = ref<HTMLInputElement | null>(null)
 const commandInput = ref('')
 const isCreatingSession = ref(false)
 const isResizing = ref(false)
@@ -58,6 +60,7 @@ const isInline = computed(() => props.mode === 'inline')
 const currentProjectName = computed(() => props.projectName || projectNameFromPath(props.projectPath))
 const activeCanWrite = computed(() => !!panel.activeSession.value?.backendSessionId && panel.activeSession.value.status === 'running')
 const renderer = computed(() => resolveTerminalRenderer({ target: props.rendererTarget ?? 'libghostty' }))
+const helperCommands = computed(() => buildTerminalHelperCommands(props.selectedIssue ? { id: props.selectedIssue.id, title: props.selectedIssue.title } : null))
 
 function projectNameFromPath(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/$/, '')
@@ -78,7 +81,7 @@ function sessionForBackend(backendSessionId: string) {
 
 function terminalSize() {
   const width = outputRef.value?.clientWidth || 900
-  const contentHeight = outputRef.value?.clientHeight || Math.max(panel.height.value - 92, 120)
+  const contentHeight = outputRef.value?.clientHeight || Math.max(panel.height.value - 128, 120)
   return {
     cols: Math.max(40, Math.floor(width / 8)),
     rows: Math.max(8, Math.floor(contentHeight / 18)),
@@ -206,6 +209,15 @@ async function pasteIntoCommand() {
   } catch (error) {
     setUiMessage(error instanceof Error ? error.message : String(error))
   }
+}
+
+function stageHelperCommand(helper: TerminalHelperCommand) {
+  if (helper.id === 'issue-id' && commandInput.value.trim()) {
+    commandInput.value = `${commandInput.value.trimEnd()} ${helper.command}`
+  } else {
+    commandInput.value = helper.command
+  }
+  nextTick(() => commandInputRef.value?.focus())
 }
 
 function handleTerminalData(payload: TerminalEventPayload) {
@@ -383,9 +395,23 @@ onUnmounted(() => {
         class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-5"
       >{{ panel.activeSession.value.buffer }}</pre>
 
+      <div class="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 px-3">
+        <button
+          v-for="helper in helperCommands"
+          :key="helper.id"
+          type="button"
+          class="shrink-0 rounded border border-white/10 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-emerald-400/40 hover:text-emerald-300"
+          :title="helper.title"
+          @click="stageHelperCommand(helper)"
+        >
+          {{ helper.label }}
+        </button>
+      </div>
+
       <form class="flex h-10 shrink-0 items-center gap-2 border-t border-white/10 px-3" @submit.prevent="submitCommand">
         <span class="font-mono text-xs text-emerald-400">$</span>
         <input
+          ref="commandInputRef"
           v-model="commandInput"
           class="min-w-0 flex-1 bg-transparent font-mono text-xs text-zinc-100 outline-none placeholder:text-zinc-600"
           :disabled="!activeCanWrite"
