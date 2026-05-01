@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+mod terminal;
+
 // Global flags for logging
 static LOGGING_ENABLED: AtomicBool = AtomicBool::new(false);
 static VERBOSE_LOGGING: AtomicBool = AtomicBool::new(false);
@@ -709,7 +711,7 @@ fn parse_issues_tolerant(output: &str, context: &str) -> Result<Vec<BdRawIssue>,
     Ok(issues)
 }
 
-fn get_extended_path() -> String {
+pub(crate) fn get_extended_path() -> String {
     let current_path = env::var("PATH").unwrap_or_default();
 
     #[cfg(target_os = "windows")]
@@ -4731,6 +4733,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(Mutex::new(WatcherState::default()))
+        .manage(terminal::TerminalManager::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -4852,6 +4855,12 @@ pub fn run() {
             delete_external_data,
             patch_external_data,
             launch_probe,
+            terminal::terminal_create,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_restart,
+            terminal::terminal_close,
+            terminal::terminal_list,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
