@@ -1,0 +1,23 @@
+.beads/issues.jsonl
+  34d5940fd6daf0d0 28,30,32-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "84edd26f3ad13570263a0a8364addc421fab18fe",
+  "prompts": {
+    "34d5940fd6daf0d0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019de533-4043-7510-989e-7f21e675fbe0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 8,
+      "total_deletions": 8,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
