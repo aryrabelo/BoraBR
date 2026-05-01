@@ -42,6 +42,13 @@ describe('task terminal source', () => {
     })
   })
 
+  it('extracts cmux surface ids from composite assignee labels', () => {
+    expect(resolveTaskTerminalSource(makeIssue({ assignee: `assistant cmux:{${surfaceId}}` }))).toMatchObject({
+      origin: 'external-cmux',
+      surfaceId,
+    })
+  })
+
   it('treats malformed cmux assignee values as unknown terminal source', () => {
     expect(resolveTaskTerminalSource(makeIssue({ assignee: 'cmux:' }))).toEqual({
       origin: 'unknown',
@@ -79,6 +86,19 @@ describe('task terminal source', () => {
 
     expect(result).toBe('external-focused')
     expect(focusCmuxSurface).toHaveBeenCalledWith(surfaceId)
+    expect(openEmbedded).not.toHaveBeenCalled()
+  })
+
+  it('reports cmux focus failures without falling back silently', async () => {
+    const focusCmuxSurface = vi.fn().mockRejectedValue(new Error('surface not found'))
+    const openEmbedded = vi.fn()
+    const showError = vi.fn()
+    const source = resolveTaskTerminalSource(makeIssue({ assignee: `cmux:${surfaceId}` }))
+
+    const result = await focusTaskTerminalSource(source, { focusCmuxSurface, openEmbedded, showError })
+
+    expect(result).toBe('external-error')
+    expect(showError).toHaveBeenCalledWith(`Could not focus cmux surface ${surfaceId}: surface not found`)
     expect(openEmbedded).not.toHaveBeenCalled()
   })
 

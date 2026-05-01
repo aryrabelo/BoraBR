@@ -255,6 +255,8 @@ const useHierarchicalDisplay = computed(() => {
 const isSelected = (id: string) => props.selectedIds?.includes(id) ?? false
 const isNewlyAdded = (id: string) => props.newlyAddedIds?.has(id) ?? false
 const canOpenTaskTerminal = computed(() => props.taskTerminalsEnabled !== false && !!props.terminalProjectPath)
+const taskTerminalError = ref('')
+let taskTerminalErrorTimer: ReturnType<typeof setTimeout> | null = null
 const {
   isIssueTerminalOpen,
   isIssueTerminalCloseGuarded,
@@ -263,6 +265,14 @@ const {
   setIssueTerminalAgentActive,
 } = useTaskTerminalSlots()
 
+function showTaskTerminalError(message: string) {
+  taskTerminalError.value = message
+  if (taskTerminalErrorTimer) clearTimeout(taskTerminalErrorTimer)
+  taskTerminalErrorTimer = setTimeout(() => {
+    taskTerminalError.value = ''
+  }, 6000)
+}
+
 const toggleTerminalForIssue = (issue: Issue, event: MouseEvent) => {
   event.stopPropagation()
   const source = resolveTaskTerminalSource(issue)
@@ -270,6 +280,7 @@ const toggleTerminalForIssue = (issue: Issue, event: MouseEvent) => {
     focusCmuxSurface: async surfaceId => {
       await cmuxFocusSurface(surfaceId)
     },
+    showError: showTaskTerminalError,
     openEmbedded: () => {
       if (isIssueTerminalOpen(issue.id)) {
         closeIssueTerminal(issue.id)
@@ -279,6 +290,7 @@ const toggleTerminalForIssue = (issue: Issue, event: MouseEvent) => {
     },
   }).catch((error) => {
     console.error('Failed to open task terminal', error)
+    showTaskTerminalError(error instanceof Error ? error.message : String(error))
   })
 }
 
@@ -434,6 +446,13 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
 
 <template>
   <div class="h-full rounded border border-border overflow-auto outline-none" tabindex="0" @keydown="handleKeydown" @click.self="$emit('deselect')">
+    <div
+      v-if="taskTerminalError"
+      class="sticky top-0 z-20 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+      role="status"
+    >
+      {{ taskTerminalError }}
+    </div>
     <Table @click.self="$emit('deselect')">
       <TableHeader>
         <TableRow class="bg-secondary/30 hover:bg-secondary/30">

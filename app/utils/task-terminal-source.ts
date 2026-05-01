@@ -25,9 +25,19 @@ export interface TaskTerminalAssigneeDisplay {
 export interface FocusTaskTerminalSourceActions {
   focusCmuxSurface: (surfaceId: string) => Promise<void>
   openEmbedded: () => void
+  showError?: (message: string) => void
 }
 
-export type FocusTaskTerminalSourceResult = 'external-focused' | 'embedded-opened' | 'unknown'
+export type FocusTaskTerminalSourceResult = 'external-focused' | 'external-error' | 'embedded-opened' | 'unknown'
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function extractCmuxSurfaceId(assignee: string): string | null {
+  const match = assignee.match(/(?:^|\s)cmux:\s*\{?([A-Za-z0-9:_-]+)/)
+  return match?.[1]?.replace(/\}+$/, '') ?? null
+}
 
 export function resolveTaskTerminalSource(issue: Pick<Issue, 'assignee'>): TaskTerminalSource {
   const assignee = issue.assignee?.trim()
@@ -35,11 +45,11 @@ export function resolveTaskTerminalSource(issue: Pick<Issue, 'assignee'>): TaskT
     return { origin: 'embedded', label: 'embedded' }
   }
 
-  if (!assignee.startsWith('cmux:')) {
+  if (!assignee.includes('cmux:')) {
     return { origin: 'embedded', label: 'embedded' }
   }
 
-  const surfaceId = assignee.slice('cmux:'.length).trim().replace(/^\{|\}$/g, '')
+  const surfaceId = extractCmuxSurfaceId(assignee)
   if (!surfaceId) {
     return { origin: 'unknown', label: 'cmux' }
   }
@@ -75,8 +85,13 @@ export async function focusTaskTerminalSource(
   actions: FocusTaskTerminalSourceActions,
 ): Promise<FocusTaskTerminalSourceResult> {
   if (source.origin === 'external-cmux') {
-    await actions.focusCmuxSurface(source.surfaceId)
-    return 'external-focused'
+    try {
+      await actions.focusCmuxSurface(source.surfaceId)
+      return 'external-focused'
+    } catch (error) {
+      actions.showError?.(`Could not focus cmux surface ${source.surfaceId}: ${errorMessage(error)}`)
+      return 'external-error'
+    }
   }
 
   if (source.origin === 'embedded') {
