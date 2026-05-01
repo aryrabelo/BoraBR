@@ -1,0 +1,29 @@
+app/utils/task-terminal-source.ts
+  2ebfc04bcc77f32f 28,31-40,48,52,88-94
+tests/utils/task-terminal-source.test.ts
+  2ebfc04bcc77f32f 45-51,92-101
+.beads/issues.jsonl
+  2ebfc04bcc77f32f 7
+app/components/issues/IssueTable.vue
+  2ebfc04bcc77f32f 258-259,268-275,283,293,449-455
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "87fe05ff604a048d8381961765340d942c2600af",
+  "prompts": {
+    "2ebfc04bcc77f32f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019de488-0b18-71a1-8832-875840257666",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 61,
+      "total_deletions": 7,
+      "accepted_lines": 62,
+      "overriden_lines": 0
+    }
+  }
+}
