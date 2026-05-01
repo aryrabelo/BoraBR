@@ -1,8 +1,8 @@
-# Beads Task-Issue Tracker
+# BoraBR
 
-A lightweight, standalone desktop application for managing [Beads](https://github.com/steveyegge/beads) issues outside of your IDE.
+A lightweight, standalone desktop application for managing [Beads](https://github.com/steveyegge/beads) issues outside your IDE.
 
-![Beads Task-Issue Tracker](docs/screenshots/app-overview-1.23.0.png)
+![BoraBR](docs/screenshots/app-overview-1.23.0.png)
 
 > [!NOTE]
 > <a href="https://pair.w3dev.fr"><picture><source media="(prefers-color-scheme: dark)" srcset="https://pair.w3dev.fr/logo-dark.png"><source media="(prefers-color-scheme: light)" srcset="https://pair.w3dev.fr/logo-light.png"><img src="https://pair.w3dev.fr/logo-light.png" alt="PaiR" height="32"></picture></a>
@@ -14,6 +14,8 @@ A lightweight, standalone desktop application for managing [Beads](https://githu
 > PaiR is fully independent: built-in CLI, own storage format (`.pair/`), zero external dependencies. Your existing `.beads/` data is never modified or overwritten — PaiR stores everything in its own directory. **Migration is automatic** for projects using `bd` 0.49.x (pre-Dolt) or `br` up to 0.1.33. Projects running `bd` 0.50+ (Dolt-based) are not currently supported for migration.
 >
 > The Beads Task-Issue Tracker remains available and functional with `bd` 0.49.x and `br` up to 0.1.33, but active development has moved to PaiR.
+
+BoraBR is the personal fork maintained in this repository (`aryrabelo/BoraBR`) and keeps compatibility with the same issue workflow and human-centered agent interface patterns.
 
 ## Why This App?
 
@@ -153,7 +155,7 @@ If you use an AI coding assistant (Claude Code, Cursor, etc.) to pilot your issu
 
 ### Download
 
-Download the latest release for your platform from the [Releases](https://github.com/w3dev33/beads-task-issue-tracker/releases) page:
+Download the latest release for your platform from the [Releases](https://github.com/aryrabelo/BoraBR/releases) page:
 
 - **macOS**: `.dmg` file (Apple Silicon & Intel)
 - **Windows**: `.msi` or `.exe` installer
@@ -166,7 +168,7 @@ macOS may block the app because it's not signed with an Apple Developer certific
 **To fix this**, run the following command after installing:
 
 ```bash
-xattr -cr /Applications/Beads\ Task-Issue\ Tracker.app
+xattr -cr /Applications/BoraBR.app
 ```
 
 Then open the app normally. This only needs to be done once.
@@ -175,8 +177,8 @@ Then open the app normally. This only needs to be done once.
 
 ```bash
 # Clone the repository
-git clone https://github.com/w3dev33/beads-task-issue-tracker.git
-cd beads-task-issue-tracker
+git clone https://github.com/aryrabelo/BoraBR.git
+cd BoraBR
 
 # Install dependencies
 pnpm install
