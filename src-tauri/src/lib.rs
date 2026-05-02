@@ -3751,8 +3751,33 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         }
     }
 
-    // 3. Open cmux workspace
+    // 3. Check if cmux workspace already exists for this task
     let workspace_name = format!("task:{}", issue_id);
+    let list_output = run_cmux(&["list-workspaces".to_string()]);
+    if let Ok(ref output) = list_output {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.lines().any(|line| line.contains(issue_id)) {
+                // Workspace exists — focus it instead of creating new one
+                let existing_ref = stdout.lines()
+                    .find(|line| line.contains(issue_id))
+                    .and_then(|line| line.split_whitespace().find(|w| w.starts_with("workspace:")))
+                    .unwrap_or("workspace:0")
+                    .to_string();
+                log::info!("[auto-mode] Workspace already exists for {}: {}", issue_id, existing_ref);
+                let _ = run_cmux(&[
+                    "select-workspace".to_string(),
+                    "--workspace".to_string(), existing_ref.clone(),
+                ]);
+                return Ok(AutoModeDispatchResponse {
+                    surface: existing_ref,
+                    worktree_path: worktree_dir,
+                    branch,
+                });
+            }
+        }
+    }
+
     let cmux_create_args = vec![
         "new-workspace".to_string(),
         "--name".to_string(), workspace_name,
