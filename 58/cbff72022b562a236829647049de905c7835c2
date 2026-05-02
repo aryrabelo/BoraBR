@@ -1,0 +1,27 @@
+app/pages/index.vue
+  8029d2988c8f6146 46,65-66,971-977,984-989,1645-1655,1683,1981-1991,2019
+tests/utils/action-center.test.ts
+  8029d2988c8f6146 10-11,415-610
+app/utils/action-center.ts
+  8029d2988c8f6146 97-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "58cbff72022b562a236829647049de905c7835c2",
+  "prompts": {
+    "8029d2988c8f6146": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "223d5ecc-a041-491c-a67f-67779ce913ef",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 280,
+      "total_deletions": 9,
+      "accepted_lines": 280,
+      "overriden_lines": 0
+    }
+  }
+}
