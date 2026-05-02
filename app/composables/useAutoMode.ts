@@ -212,6 +212,7 @@ export function useAutoMode(
   async function dispatchReview(issueId: string, executorCommit: string) {
     const task = activeTaskMap.value.get(issueId)
     if (!task || task.status !== 'running') return
+    if (!executorCommit) return
 
     task.status = 'reviewing'
     activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))

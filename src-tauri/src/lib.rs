@@ -3925,7 +3925,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
             stdout.split_whitespace()
                 .find(|s| s.starts_with("workspace:"))
-                .unwrap_or("workspace:0")
+                .ok_or_else(|| format!("cmux new-workspace returned no workspace ref: {}", stdout))?
                 .to_string()
         }
     };
@@ -4042,7 +4042,7 @@ async fn auto_mode_dispatch_review(request: AutoModeDispatchReviewRequest) -> Re
 
             stdout.split_whitespace()
                 .find(|s| s.starts_with("workspace:"))
-                .unwrap_or("workspace:0")
+                .ok_or_else(|| format!("cmux new-workspace (review) returned no workspace ref: {}", stdout))?
                 .to_string()
         }
     };
