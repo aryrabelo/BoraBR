@@ -3667,7 +3667,9 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     };
     let project_path = &git_root;
 
-    let worktrees_base = format!("{}/../worktrees", project_path);
+    // Derive epic dir from issue ID: "borabr-unf.1" → epic "borabr-unf"
+    let epic_dir = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
+    let worktrees_base = format!("{}/../worktrees/{}", project_path, epic_dir);
     let worktree_dir = format!("{}/{}", worktrees_base, branch);
 
     log::info!("[auto-mode] Dispatching {} to worktree {}", issue_id, worktree_dir);
@@ -3723,6 +3725,30 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
             }
         }
         log::info!("[auto-mode] Worktree ready: {}", worktree_dir);
+    }
+
+    // 2. Symlink .beads/ from main repo so all worktrees share issue state
+    let worktree_beads = std::path::Path::new(&worktree_dir).join(".beads");
+    let main_beads = std::path::Path::new(project_path).join(".beads");
+    if main_beads.exists() && !worktree_beads.exists() {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&main_beads, &worktree_beads)
+                .map_err(|e| format!("Failed to symlink .beads: {}", e))?;
+            log::info!("[auto-mode] Symlinked .beads/ → {}", main_beads.display());
+        }
+    } else if worktree_beads.is_symlink() {
+        log::info!("[auto-mode] .beads/ symlink already exists");
+    } else if worktree_beads.is_dir() {
+        // Replace existing .beads/ dir with symlink
+        log::info!("[auto-mode] Replacing .beads/ dir with symlink to main repo");
+        std::fs::remove_dir_all(&worktree_beads)
+            .map_err(|e| format!("Failed to remove worktree .beads/: {}", e))?;
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&main_beads, &worktree_beads)
+                .map_err(|e| format!("Failed to symlink .beads: {}", e))?;
+        }
     }
 
     // 3. Open cmux workspace
