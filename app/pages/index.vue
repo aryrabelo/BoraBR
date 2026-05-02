@@ -109,8 +109,17 @@ const { stats, readyIssues, fetchStats, updateFromPollData, clearStats } = useDa
 const { check: checkForUpdates, startPeriodicCheck, stopPeriodicCheck } = useUpdateChecker()
 
 // Auto-mode: dispatch tasks to cmux workspaces
-const inProgressIssuesForAutoMode = computed(() => issues.value.filter(i => i.status === 'in_progress'))
-const { enabled: autoModeEnabled, activeTaskList: autoModeTasks, isDispatching: autoModeDispatching } = useAutoMode(beadsPath, readyIssues, inProgressIssuesForAutoMode)
+const inProgressIssuesForAutoMode = computed(() => issues.value.filter(i => i.status === 'in_progress' && i.type !== 'epic'))
+const refreshAutoModeReadyIssues = async () => {
+  const readyData = await fetchPollData()
+  if (readyData) {
+    updateFromPollData(issues.value, readyData)
+  }
+  return readyData
+}
+const { enabled: autoModeEnabled, activeTaskList: autoModeTasks, isDispatching: autoModeDispatching } = useAutoMode(beadsPath, readyIssues, inProgressIssuesForAutoMode, {
+  refreshReady: refreshAutoModeReadyIssues,
+})
 const autoModeDispatchingIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'dispatching').map(t => t.issueId)))
 const autoModeRunningIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'running').map(t => t.issueId)))
 const { showDebugPanel, showSettingsDialog } = useAppMenu()
