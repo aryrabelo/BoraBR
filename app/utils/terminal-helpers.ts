@@ -22,18 +22,11 @@ export function shellQuote(value: string): string {
 function buildStartCommand(issueId: string): string {
   const id = shellQuote(issueId)
 
-  const claimCommand = [
+  return [
     'ACTOR="${BR_ACTOR:-assistant}"',
     'SURFACE_ID="${CMUX_SURFACE_ID:-${CANIX_PANEL_ID:-${CMUX_PANEL_ID:-}}}"',
-    'if [ -n "$SURFACE_ID" ]; then',
-    `  ASSIGNEE="cmux:${'$'}{SURFACE_ID}"`,
-    `  br update --actor "$ACTOR" ${id} --status in_progress --assignee "$ASSIGNEE" --json`,
-    'else',
-    `  br update --actor "$ACTOR" ${id} --status in_progress --claim --json`,
-    'fi',
-  ].join(' && ')
-
-  return claimCommand
+    `if [ -n "$SURFACE_ID" ]; then ASSIGNEE="cmux:${'$'}{SURFACE_ID}"; br update --actor "$ACTOR" ${id} --status in_progress --assignee "$ASSIGNEE" --json; else br update --actor "$ACTOR" ${id} --status in_progress --claim --json; fi`,
+  ].join('; ')
 }
 
 export function buildTerminalHelperCommands(issue?: TerminalHelperIssue | null): TerminalHelperCommand[] {

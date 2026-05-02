@@ -37,6 +37,64 @@ export interface ProjectWorktreePullRequest {
   updatedAt?: string | null
 }
 
+export type ActionCenterGitHubPullRequestReviewState =
+  | 'approved'
+  | 'changes_requested'
+  | 'review_requested'
+  | 'commented'
+  | 'draft'
+  | 'pending_review'
+  | string
+
+export interface ActionCenterGitHubPullRequest {
+  repoFullName: string
+  owner: string
+  repo: string
+  number: number
+  title: string
+  url: string
+  state: 'open' | string
+  branch: string
+  author: string
+  isDraft: boolean
+  reviewState: ActionCenterGitHubPullRequestReviewState
+  comments: number
+  reviewComments: number
+  requestedReviewers: number
+  createdAt?: string | null
+  updatedAt?: string | null
+  actionTimestamp: number
+}
+
+export interface ActionCenterGitHubPullRequestResponse {
+  projectPath: string
+  repoFullName?: string | null
+  error?: string | null
+  pullRequests: ActionCenterGitHubPullRequest[]
+}
+
+export interface ActionCenterLinearIssue {
+  identifier: string
+  title: string
+  url: string
+  status: string
+  stateType: string
+  isUat: boolean
+  assignee?: string | null
+  labels: string[]
+  pullRequestUrls: string[]
+  unackedComments: number
+  updatedAt?: string | null
+  actionTimestamp: number
+}
+
+export interface ActionCenterLinearIssueResponse {
+  teamKey: string
+  assignee?: string | null
+  error?: string | null
+  issues: ActionCenterLinearIssue[]
+}
+
 export interface ProjectWorktree {
   rootPath: string
   worktreePath: string
@@ -133,6 +191,32 @@ export async function discoverProjectWorktrees(projectPath: string): Promise<Pro
   }
 
   return []
+}
+
+export async function listProjectGitHubPullRequests(projectPath: string): Promise<ActionCenterGitHubPullRequestResponse> {
+  if (isTauri()) {
+    return invoke<ActionCenterGitHubPullRequestResponse>('list_project_github_pull_requests', { projectPath })
+  }
+
+  return {
+    projectPath,
+    repoFullName: null,
+    error: null,
+    pullRequests: [],
+  }
+}
+
+export async function listActionCenterLinearIssues(): Promise<ActionCenterLinearIssueResponse> {
+  if (isTauri()) {
+    return invoke<ActionCenterLinearIssueResponse>('list_action_center_linear_issues')
+  }
+
+  return {
+    teamKey: 'ENG',
+    assignee: null,
+    error: null,
+    issues: [],
+  }
 }
 
 async function postExternalData(url: string, body: string): Promise<string> {

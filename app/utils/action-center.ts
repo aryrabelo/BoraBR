@@ -1,4 +1,10 @@
 import type { Issue } from '~/types/issue'
+import type {
+  ActionCenterGitHubPullRequest,
+  ActionCenterGitHubPullRequestResponse,
+  ActionCenterLinearIssue,
+  ActionCenterLinearIssueResponse,
+} from '~/utils/bd-api'
 
 export interface ActionCenterProjectActionState {
   projectPath: string
@@ -12,6 +18,43 @@ export interface ActionCenterProjectIdleState {
   projectPath: string
   projectName: string
   idleSince: number
+}
+
+export interface ActionCenterGitHubPullRequestState {
+  projectPath: string
+  projectName: string
+  repoFullName: string | null
+  error: string | null
+  pullRequests: ActionCenterGitHubPullRequest[]
+}
+
+export interface ActionCenterLinearIssueState {
+  teamKey: string
+  assignee: string | null
+  error: string | null
+  issues: ActionCenterLinearIssue[]
+}
+
+export type ActionCenterReconciledActionKind =
+  | 'move_linear_to_uat'
+  | 'linear_missing_pr'
+  | 'github_pr_attention'
+  | 'linear_comments_pending'
+  | 'github_pr_unlinked'
+
+export type ActionCenterReconciledActionTarget = 'github' | 'linear'
+
+export interface ActionCenterReconciledAction {
+  actionKey: string
+  nextActionKind: ActionCenterReconciledActionKind
+  title: string
+  description: string
+  originSources: ActionCenterReconciledActionTarget[]
+  primaryTarget: ActionCenterReconciledActionTarget
+  primaryUrl: string
+  githubPullRequest?: ActionCenterGitHubPullRequest
+  linearIssue?: ActionCenterLinearIssue
+  actionTimestamp: number
 }
 
 interface BuildActionCenterProjectActionStateOptions {
@@ -28,6 +71,21 @@ interface BuildActionCenterProjectIdleStateOptions {
   projectIssues: Pick<Issue, 'status' | 'createdAt' | 'updatedAt'>[]
   fallbackTimestamp: number
   existingIdleSince?: number
+}
+
+interface BuildActionCenterGitHubPullRequestStateOptions {
+  projectPath: string
+  projectName: string
+  response: ActionCenterGitHubPullRequestResponse
+}
+
+interface BuildActionCenterLinearIssueStateOptions {
+  response: ActionCenterLinearIssueResponse
+}
+
+interface BuildActionCenterReconciledActionsOptions {
+  githubPullRequestStates: ActionCenterGitHubPullRequestState[]
+  linearIssueState?: ActionCenterLinearIssueState | null
 }
 
 export const normalizeActionCenterProjectPath = (path: string) => path.replace(/\/+$/, '')
@@ -107,4 +165,213 @@ export function buildActionCenterProjectIdleState(
     idleSince: options.existingIdleSince
       ?? getActionCenterProjectIdleSince(options.projectIssues, options.fallbackTimestamp),
   }
+}
+
+export function buildActionCenterGitHubPullRequestState(
+  options: BuildActionCenterGitHubPullRequestStateOptions,
+): ActionCenterGitHubPullRequestState {
+  const repoFullName = options.response.repoFullName ?? null
+
+  return {
+    projectPath: options.projectPath,
+    projectName: options.projectName,
+    repoFullName,
+    error: options.response.error ?? null,
+    pullRequests: options.response.pullRequests
+      .filter(pr => pr.state === 'open')
+      .map(pr => ({
+        ...pr,
+        repoFullName: pr.repoFullName || repoFullName || '',
+      }))
+      .sort((a, b) => a.actionTimestamp - b.actionTimestamp || a.number - b.number),
+  }
+}
+
+export function buildActionCenterLinearIssueState(
+  options: BuildActionCenterLinearIssueStateOptions,
+): ActionCenterLinearIssueState {
+  return {
+    teamKey: options.response.teamKey,
+    assignee: options.response.assignee ?? null,
+    error: options.response.error ?? null,
+    issues: options.response.issues
+      .sort((a, b) => a.actionTimestamp - b.actionTimestamp || a.identifier.localeCompare(b.identifier)),
+  }
+}
+
+function normalizeActionCenterPullRequestUrl(url: string): string {
+  return url.trim().replace(/\/+$/, '').toLowerCase()
+}
+
+function extractActionCenterTicketIdentifiers(...values: Array<string | null | undefined>): string[] {
+  const identifiers = new Set<string>()
+  for (const value of values) {
+    const matches = value?.match(/\b[A-Z]+-\d+\b/gi) ?? []
+    for (const match of matches) {
+      identifiers.add(match.toUpperCase())
+    }
+  }
+  return Array.from(identifiers)
+}
+
+function formatActionCenterReviewState(state: string): string {
+  const labels: Record<string, string> = {
+    approved: 'PR aprovado',
+    changes_requested: 'mudanças pedidas no PR',
+    review_requested: 'review solicitado',
+    commented: 'PR com comentários',
+    draft: 'PR em draft',
+    pending_review: 'PR aguardando review',
+  }
+  return labels[state] ?? state
+}
+
+function describeActionCenterLink(
+  pr?: ActionCenterGitHubPullRequest,
+  issue?: ActionCenterLinearIssue,
+): string {
+  return [
+    pr ? `GitHub ${pr.repoFullName} #${pr.number}` : '',
+    issue ? `Linear ${issue.identifier} (${issue.status || 'sem status'})` : '',
+  ].filter(Boolean).join(' • ')
+}
+
+function buildMatchedActionTimestamp(
+  pr?: ActionCenterGitHubPullRequest,
+  issue?: ActionCenterLinearIssue,
+): number {
+  return Math.min(
+    pr?.actionTimestamp ?? Number.MAX_SAFE_INTEGER,
+    issue?.actionTimestamp ?? Number.MAX_SAFE_INTEGER,
+  )
+}
+
+export function buildActionCenterReconciledActions(
+  options: BuildActionCenterReconciledActionsOptions,
+): ActionCenterReconciledAction[] {
+  const pullRequests = options.githubPullRequestStates.flatMap(state => state.pullRequests)
+  const linearIssues = options.linearIssueState?.issues ?? []
+  const pullRequestsByUrl = new Map<string, ActionCenterGitHubPullRequest>()
+  const pullRequestsByIdentifier = new Map<string, ActionCenterGitHubPullRequest[]>()
+  const matchedPullRequestUrls = new Set<string>()
+  const actions: ActionCenterReconciledAction[] = []
+
+  for (const pr of pullRequests) {
+    pullRequestsByUrl.set(normalizeActionCenterPullRequestUrl(pr.url), pr)
+    for (const identifier of extractActionCenterTicketIdentifiers(pr.branch, pr.title)) {
+      const matches = pullRequestsByIdentifier.get(identifier) ?? []
+      matches.push(pr)
+      pullRequestsByIdentifier.set(identifier, matches)
+    }
+  }
+
+  const findPullRequestForIssue = (issue: ActionCenterLinearIssue) => {
+    for (const url of issue.pullRequestUrls) {
+      const pr = pullRequestsByUrl.get(normalizeActionCenterPullRequestUrl(url))
+      if (pr) return pr
+    }
+    return pullRequestsByIdentifier.get(issue.identifier.toUpperCase())?.[0]
+  }
+
+  for (const issue of linearIssues) {
+    const pr = findPullRequestForIssue(issue)
+    if (pr) {
+      matchedPullRequestUrls.add(normalizeActionCenterPullRequestUrl(pr.url))
+    }
+
+    if (!pr) {
+      actions.push({
+        actionKey: `linear-missing-pr:${issue.identifier}:${issue.updatedAt || issue.actionTimestamp}`,
+        nextActionKind: 'linear_missing_pr',
+        title: `${issue.identifier}: criar ou vincular PR`,
+        description: [
+          describeActionCenterLink(undefined, issue),
+          issue.assignee ? `assignee ${issue.assignee}` : '',
+        ].filter(Boolean).join(' • '),
+        originSources: ['linear'],
+        primaryTarget: 'linear',
+        primaryUrl: issue.url,
+        linearIssue: issue,
+        actionTimestamp: issue.actionTimestamp,
+      })
+      continue
+    }
+
+    const linkedDescription = describeActionCenterLink(pr, issue)
+    if (pr.reviewState === 'approved' && !issue.isUat) {
+      actions.push({
+        actionKey: `move-linear-to-uat:${issue.identifier}:${pr.repoFullName}:${pr.number}:${issue.updatedAt || issue.actionTimestamp}`,
+        nextActionKind: 'move_linear_to_uat',
+        title: `${issue.identifier}: mover Linear para UAT`,
+        description: `${linkedDescription} • ${formatActionCenterReviewState(pr.reviewState)}`,
+        originSources: ['github', 'linear'],
+        primaryTarget: 'linear',
+        primaryUrl: issue.url,
+        githubPullRequest: pr,
+        linearIssue: issue,
+        actionTimestamp: buildMatchedActionTimestamp(pr, issue),
+      })
+      continue
+    }
+
+    if (
+      pr.reviewState === 'changes_requested'
+      || pr.reviewState === 'commented'
+      || pr.reviewState === 'review_requested'
+      || pr.comments > 0
+      || pr.reviewComments > 0
+      || pr.requestedReviewers > 0
+    ) {
+      actions.push({
+        actionKey: `github-pr-attention:${pr.repoFullName}:${pr.number}:${pr.updatedAt || pr.actionTimestamp}`,
+        nextActionKind: 'github_pr_attention',
+        title: `#${pr.number}: tratar pendência do PR`,
+        description: `${linkedDescription} • ${formatActionCenterReviewState(pr.reviewState)}`,
+        originSources: ['github', 'linear'],
+        primaryTarget: 'github',
+        primaryUrl: pr.url,
+        githubPullRequest: pr,
+        linearIssue: issue,
+        actionTimestamp: buildMatchedActionTimestamp(pr, issue),
+      })
+      continue
+    }
+
+    if (issue.unackedComments > 0) {
+      actions.push({
+        actionKey: `linear-comments-pending:${issue.identifier}:${issue.updatedAt || issue.actionTimestamp}`,
+        nextActionKind: 'linear_comments_pending',
+        title: `${issue.identifier}: responder comentários no Linear`,
+        description: `${linkedDescription} • ${issue.unackedComments} comentário(s) pendente(s)`,
+        originSources: ['github', 'linear'],
+        primaryTarget: 'linear',
+        primaryUrl: issue.url,
+        githubPullRequest: pr,
+        linearIssue: issue,
+        actionTimestamp: buildMatchedActionTimestamp(pr, issue),
+      })
+    }
+  }
+
+  for (const pr of pullRequests) {
+    if (matchedPullRequestUrls.has(normalizeActionCenterPullRequestUrl(pr.url))) {
+      continue
+    }
+
+    actions.push({
+      actionKey: `github-pr-unlinked:${pr.repoFullName}:${pr.number}:${pr.updatedAt || pr.actionTimestamp}`,
+      nextActionKind: 'github_pr_unlinked',
+      title: `#${pr.number}: vincular PR ao Linear`,
+      description: `${describeActionCenterLink(pr)} • ${formatActionCenterReviewState(pr.reviewState)}`,
+      originSources: ['github'],
+      primaryTarget: 'github',
+      primaryUrl: pr.url,
+      githubPullRequest: pr,
+      actionTimestamp: pr.actionTimestamp,
+    })
+  }
+
+  return actions.sort((a, b) =>
+    a.actionTimestamp - b.actionTimestamp || a.actionKey.localeCompare(b.actionKey),
+  )
 }

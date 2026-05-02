@@ -50,6 +50,10 @@ static CLI_CLIENT_INFO: LazyLock<Mutex<Option<(CliClient, u32, u32, u32)>>> =
     LazyLock::new(|| Mutex::new(None));
 static GITHUB_PR_SIGNAL_CACHE: LazyLock<Mutex<HashMap<String, GitHubPullRequestCacheEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static GITHUB_ACTION_CENTER_PR_CACHE: LazyLock<Mutex<HashMap<String, GitHubActionCenterPullRequestCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static LINEAR_ACTION_CENTER_CACHE: LazyLock<Mutex<Option<LinearActionCenterCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 // Conditional logging macros
 macro_rules! log_info {
@@ -133,6 +137,77 @@ pub struct ProjectWorktreePullRequest {
     pub updated_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ActionCenterGitHubPullRequest {
+    #[serde(rename = "repoFullName")]
+    pub repo_full_name: String,
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    pub branch: String,
+    pub author: String,
+    #[serde(rename = "isDraft")]
+    pub is_draft: bool,
+    #[serde(rename = "reviewState")]
+    pub review_state: String,
+    pub comments: u64,
+    #[serde(rename = "reviewComments")]
+    pub review_comments: u64,
+    #[serde(rename = "requestedReviewers")]
+    pub requested_reviewers: u64,
+    #[serde(rename = "createdAt")]
+    pub created_at: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+    #[serde(rename = "actionTimestamp")]
+    pub action_timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ActionCenterGitHubPullRequestResponse {
+    #[serde(rename = "projectPath")]
+    pub project_path: String,
+    #[serde(rename = "repoFullName")]
+    pub repo_full_name: Option<String>,
+    pub error: Option<String>,
+    #[serde(rename = "pullRequests")]
+    pub pull_requests: Vec<ActionCenterGitHubPullRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ActionCenterLinearIssue {
+    pub identifier: String,
+    pub title: String,
+    pub url: String,
+    pub status: String,
+    #[serde(rename = "stateType")]
+    pub state_type: String,
+    #[serde(rename = "isUat")]
+    pub is_uat: bool,
+    pub assignee: Option<String>,
+    pub labels: Vec<String>,
+    #[serde(rename = "pullRequestUrls")]
+    pub pull_request_urls: Vec<String>,
+    #[serde(rename = "unackedComments")]
+    pub unacked_comments: usize,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+    #[serde(rename = "actionTimestamp")]
+    pub action_timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ActionCenterLinearIssueResponse {
+    #[serde(rename = "teamKey")]
+    pub team_key: String,
+    pub assignee: Option<String>,
+    pub error: Option<String>,
+    pub issues: Vec<ActionCenterLinearIssue>,
+}
+
 #[derive(Debug, Deserialize)]
 struct GitHubPullRequest {
     number: u64,
@@ -144,10 +219,69 @@ struct GitHubPullRequest {
     updated_at: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GitHubRepoPullRequestUser {
+    login: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubAuthenticatedUser {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRepoPullRequestHead {
+    #[serde(rename = "ref")]
+    ref_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRepoPullRequest {
+    number: u64,
+    title: String,
+    #[serde(rename = "html_url")]
+    url: String,
+    state: String,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    user: Option<GitHubRepoPullRequestUser>,
+    #[serde(default)]
+    head: Option<GitHubRepoPullRequestHead>,
+    #[serde(default)]
+    comments: Option<u64>,
+    #[serde(default)]
+    review_comments: Option<u64>,
+    #[serde(default)]
+    requested_reviewers: Vec<GitHubRepoPullRequestUser>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubPullRequestReview {
+    state: String,
+    #[serde(default)]
+    user: Option<GitHubRepoPullRequestUser>,
+}
+
 #[derive(Debug, Clone)]
 struct GitHubPullRequestCacheEntry {
     fetched_at: Instant,
     pull_request: Option<ProjectWorktreePullRequest>,
+}
+
+#[derive(Debug, Clone)]
+struct GitHubActionCenterPullRequestCacheEntry {
+    fetched_at: Instant,
+    repo_full_name: String,
+    pull_requests: Vec<ActionCenterGitHubPullRequest>,
+}
+
+#[derive(Debug, Clone)]
+struct LinearActionCenterCacheEntry {
+    fetched_at: Instant,
+    response: ActionCenterLinearIssueResponse,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3850,6 +3984,8 @@ const RECENT_ACTIVITY_WORKTREE_LIMIT: usize = 5;
 const GITHUB_PR_SIGNAL_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const GITHUB_PR_SIGNAL_MAX_BRANCHES_PER_DISCOVERY: usize = 20;
 const GITHUB_RECENT_MERGED_WINDOW_MS: u64 = 14 * 24 * 60 * 60 * 1_000;
+const JS_MAX_SAFE_INTEGER_MILLIS: u64 = 9_007_199_254_740_991;
+const LINEAR_ACTION_CENTER_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
 fn system_time_epoch_millis(time: std::time::SystemTime) -> Option<u64> {
     time.duration_since(std::time::UNIX_EPOCH)
@@ -4153,6 +4289,592 @@ async fn cached_github_pull_request_signal(
     Ok(pull_request)
 }
 
+fn derive_action_center_github_review_state(
+    is_draft: bool,
+    requested_reviewers: u64,
+    comments: u64,
+    review_comments: u64,
+    reviews: &[GitHubPullRequestReview],
+) -> String {
+    if is_draft {
+        return "draft".to_string();
+    }
+
+    let mut latest_by_author: HashMap<String, String> = HashMap::new();
+    for (index, review) in reviews.iter().enumerate() {
+        let state = review.state.to_uppercase();
+        if !matches!(state.as_str(), "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED") {
+            continue;
+        }
+
+        let author = review
+            .user
+            .as_ref()
+            .and_then(|user| user.login.as_deref())
+            .filter(|login| !login.is_empty())
+            .map(|login| login.to_string())
+            .unwrap_or_else(|| format!("unknown-reviewer-{}", index));
+        latest_by_author.insert(author, state);
+    }
+
+    if latest_by_author.values().any(|state| state == "CHANGES_REQUESTED") {
+        return "changes_requested".to_string();
+    }
+
+    if latest_by_author.values().any(|state| state == "APPROVED") {
+        return "approved".to_string();
+    }
+
+    if requested_reviewers > 0 {
+        return "review_requested".to_string();
+    }
+
+    if latest_by_author.values().any(|state| state == "COMMENTED")
+        || comments > 0
+        || review_comments > 0
+    {
+        return "commented".to_string();
+    }
+
+    "pending_review".to_string()
+}
+
+fn action_center_github_pr_timestamp(pr: &GitHubRepoPullRequest) -> u64 {
+    pr.created_at
+        .as_deref()
+        .and_then(parse_github_timestamp_millis)
+        .or_else(|| pr.updated_at.as_deref().and_then(parse_github_timestamp_millis))
+        .unwrap_or(JS_MAX_SAFE_INTEGER_MILLIS)
+}
+
+fn action_center_github_pr_from_github(
+    owner: &str,
+    repo: &str,
+    pr: &GitHubRepoPullRequest,
+    reviews: &[GitHubPullRequestReview],
+) -> ActionCenterGitHubPullRequest {
+    let requested_reviewers = pr.requested_reviewers.len() as u64;
+    let comments = pr.comments.unwrap_or(0);
+    let review_comments = pr.review_comments.unwrap_or(0);
+
+    ActionCenterGitHubPullRequest {
+        repo_full_name: format!("{}/{}", owner, repo),
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        number: pr.number,
+        title: pr.title.clone(),
+        url: pr.url.clone(),
+        state: pr.state.clone(),
+        branch: pr
+            .head
+            .as_ref()
+            .and_then(|head| head.ref_name.clone())
+            .unwrap_or_default(),
+        author: pr
+            .user
+            .as_ref()
+            .and_then(|user| user.login.clone())
+            .unwrap_or_else(|| "unknown".to_string()),
+        is_draft: pr.draft,
+        review_state: derive_action_center_github_review_state(
+            pr.draft,
+            requested_reviewers,
+            comments,
+            review_comments,
+            reviews,
+        ),
+        comments,
+        review_comments,
+        requested_reviewers,
+        created_at: pr.created_at.clone(),
+        updated_at: pr.updated_at.clone(),
+        action_timestamp: action_center_github_pr_timestamp(pr),
+    }
+}
+
+fn is_action_center_github_pr_relevant(pr: &GitHubRepoPullRequest, viewer_login: &str) -> bool {
+    let viewer_login = viewer_login.trim();
+    if viewer_login.is_empty() {
+        return false;
+    }
+
+    let is_author = pr
+        .user
+        .as_ref()
+        .and_then(|user| user.login.as_deref())
+        .is_some_and(|login| login.eq_ignore_ascii_case(viewer_login));
+    if is_author {
+        return true;
+    }
+
+    pr.requested_reviewers.iter().any(|reviewer| {
+        reviewer
+            .login
+            .as_deref()
+            .is_some_and(|login| login.eq_ignore_ascii_case(viewer_login))
+    })
+}
+
+async fn fetch_action_center_github_viewer_login(
+    client: &reqwest::Client,
+) -> Result<String, String> {
+    let response = with_github_auth(client.get("https://api.github.com/user"))
+        .send()
+        .await
+        .map_err(|e| format!("GitHub user request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub user request returned status: {}", response.status()));
+    }
+
+    let user: GitHubAuthenticatedUser = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse GitHub user response: {}", e))?;
+    if user.login.trim().is_empty() {
+        return Err("GitHub user response did not include a login".to_string());
+    }
+    Ok(user.login)
+}
+
+async fn fetch_action_center_github_pull_request_reviews(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<Vec<GitHubPullRequestReview>, String> {
+    let url = format!("https://api.github.com/repos/{}/{}/pulls/{}/reviews", owner, repo, number);
+    let response = with_github_auth(client.get(url))
+        .query(&[("per_page", "100")])
+        .send()
+        .await
+        .map_err(|e| format!("GitHub PR reviews request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub PR reviews request returned status: {}", response.status()));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse GitHub PR reviews response: {}", e))
+}
+
+async fn fetch_action_center_github_pull_request_detail(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<GitHubRepoPullRequest, String> {
+    let url = format!("https://api.github.com/repos/{}/{}/pulls/{}", owner, repo, number);
+    let response = with_github_auth(client.get(url))
+        .send()
+        .await
+        .map_err(|e| format!("GitHub PR detail request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub PR detail request returned status: {}", response.status()));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse GitHub PR detail response: {}", e))
+}
+
+async fn fetch_action_center_github_pull_requests(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    viewer_login: &str,
+) -> Result<Vec<ActionCenterGitHubPullRequest>, String> {
+    let url = format!("https://api.github.com/repos/{}/{}/pulls", owner, repo);
+    let response = with_github_auth(client.get(url))
+        .query(&[
+            ("state", "open"),
+            ("sort", "created"),
+            ("direction", "asc"),
+            ("per_page", "20"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("GitHub PR request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub PR request returned status: {}", response.status()));
+    }
+
+    let pull_requests: Vec<GitHubRepoPullRequest> = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse GitHub PR response: {}", e))?;
+
+    let mut signals = Vec::with_capacity(pull_requests.len());
+    for pr in pull_requests {
+        let pr = match fetch_action_center_github_pull_request_detail(
+            &client,
+            owner,
+            repo,
+            pr.number,
+        )
+        .await
+        {
+            Ok(pr_detail) => pr_detail,
+            Err(error) => {
+                log_warn!(
+                    "[action-center] GitHub PR detail unavailable for {}/{}#{}: {}",
+                    owner,
+                    repo,
+                    pr.number,
+                    error
+                );
+                pr
+            }
+        };
+        if !is_action_center_github_pr_relevant(&pr, viewer_login) {
+            continue;
+        }
+
+        let reviews = match fetch_action_center_github_pull_request_reviews(
+            client,
+            owner,
+            repo,
+            pr.number,
+        )
+        .await
+        {
+            Ok(reviews) => reviews,
+            Err(error) => {
+                log_warn!(
+                    "[action-center] GitHub PR review state unavailable for {}/{}#{}: {}",
+                    owner,
+                    repo,
+                    pr.number,
+                    error
+                );
+                Vec::new()
+            }
+        };
+        signals.push(action_center_github_pr_from_github(owner, repo, &pr, &reviews));
+    }
+
+    signals.sort_by(|a, b| {
+        a.action_timestamp
+            .cmp(&b.action_timestamp)
+            .then_with(|| a.number.cmp(&b.number))
+    });
+    Ok(signals)
+}
+
+async fn cached_action_center_github_pull_requests(
+    owner: &str,
+    repo: &str,
+) -> Result<(String, Vec<ActionCenterGitHubPullRequest>), String> {
+    let client = github_client()?;
+    let viewer_login = fetch_action_center_github_viewer_login(&client).await?;
+    let repo_full_name = format!("{}/{}", owner, repo);
+    let cache_key = format!("{}@{}", repo_full_name.to_lowercase(), viewer_login.to_lowercase());
+    if let Some(entry) = GITHUB_ACTION_CENTER_PR_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&cache_key).cloned())
+    {
+        if entry.fetched_at.elapsed() <= GITHUB_PR_SIGNAL_CACHE_TTL {
+            return Ok((entry.repo_full_name, entry.pull_requests));
+        }
+    }
+
+    let pull_requests =
+        fetch_action_center_github_pull_requests(&client, owner, repo, &viewer_login).await?;
+    if let Ok(mut cache) = GITHUB_ACTION_CENTER_PR_CACHE.lock() {
+        cache.insert(
+            cache_key,
+            GitHubActionCenterPullRequestCacheEntry {
+                fetched_at: Instant::now(),
+                repo_full_name: repo_full_name.clone(),
+                pull_requests: pull_requests.clone(),
+            },
+        );
+    }
+    Ok((repo_full_name, pull_requests))
+}
+
+fn get_linear_api_key() -> Option<String> {
+    if let Ok(token) = env::var("LINEAR_API_KEY") {
+        if !token.trim().is_empty() {
+            return Some(token.trim().to_string());
+        }
+    }
+
+    let credentials_path = dirs::home_dir()?.join(".linear-credentials");
+    let content = fs::read_to_string(credentials_path).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim().trim_start_matches("export ").trim();
+        let Some(value) = trimmed.strip_prefix("LINEAR_API_KEY=") else {
+            continue;
+        };
+        let token = value.trim().trim_matches('"').trim_matches('\'');
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+fn json_str(value: &serde_json::Value, path: &[&str]) -> String {
+    let mut current = value;
+    for key in path {
+        let Some(next) = current.get(*key) else {
+            return String::new();
+        };
+        current = next;
+    }
+    current.as_str().unwrap_or_default().to_string()
+}
+
+fn json_optional_str(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let value = json_str(value, path);
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn json_nodes<'a>(value: &'a serde_json::Value, path: &[&str]) -> Vec<&'a serde_json::Value> {
+    let mut current = value;
+    for key in path {
+        let Some(next) = current.get(*key) else {
+            return Vec::new();
+        };
+        current = next;
+    }
+    current
+        .as_array()
+        .map(|items| items.iter().collect())
+        .or_else(|| current.get("nodes").and_then(|nodes| nodes.as_array()).map(|items| items.iter().collect()))
+        .unwrap_or_default()
+}
+
+fn json_collection_len(value: &serde_json::Value, key: &str) -> usize {
+    let Some(collection) = value.get(key) else {
+        return 0;
+    };
+    if let Some(items) = collection.as_array() {
+        return items.len();
+    }
+    collection
+        .get("nodes")
+        .and_then(|nodes| nodes.as_array())
+        .map(|items| items.len())
+        .unwrap_or(0)
+}
+
+fn collect_github_pull_request_urls(value: &str) -> Vec<String> {
+    value
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ')' | '(' | ',' | '<' | '>'))
+        .filter_map(|part| {
+            let trimmed = part.trim_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | ')' | '('));
+            if trimmed.contains("github.com/") && trimmed.contains("/pull/") {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn action_center_linear_timestamp(issue: &serde_json::Value) -> u64 {
+    let state_started_at = issue
+        .get("stateHistory")
+        .and_then(|history| history.get("nodes"))
+        .and_then(|nodes| nodes.as_array())
+        .and_then(|nodes| nodes.first())
+        .and_then(|state| state.get("startedAt"))
+        .and_then(|value| value.as_str());
+
+    state_started_at
+        .and_then(parse_github_timestamp_millis)
+        .or_else(|| json_optional_str(issue, &["updatedAt"]).as_deref().and_then(parse_github_timestamp_millis))
+        .unwrap_or(JS_MAX_SAFE_INTEGER_MILLIS)
+}
+
+fn action_center_linear_unacked_comments(issue: &serde_json::Value) -> usize {
+    json_nodes(issue, &["comments", "nodes"])
+        .into_iter()
+        .filter(|comment| {
+            let is_me = comment
+                .get("user")
+                .and_then(|user| user.get("isMe"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            !is_me
+                && json_collection_len(comment, "reactions") == 0
+                && comment
+                    .get("children")
+                    .and_then(|children| children.get("nodes"))
+                    .and_then(|nodes| nodes.as_array())
+                    .map(|nodes| nodes.is_empty())
+                    .unwrap_or(true)
+        })
+        .count()
+}
+
+fn action_center_linear_issue_from_value(issue: &serde_json::Value) -> Option<ActionCenterLinearIssue> {
+    let identifier = json_str(issue, &["identifier"]);
+    if identifier.is_empty() {
+        return None;
+    }
+
+    let status = json_str(issue, &["state", "name"]);
+    let labels = json_nodes(issue, &["labels", "nodes"])
+        .into_iter()
+        .filter_map(|label| json_optional_str(label, &["name"]))
+        .collect();
+
+    let mut pull_request_urls = Vec::new();
+    for attachment in json_nodes(issue, &["attachments", "nodes"]) {
+        if let Some(url) = json_optional_str(attachment, &["url"]) {
+            pull_request_urls.extend(collect_github_pull_request_urls(&url));
+        }
+        if let Some(title) = json_optional_str(attachment, &["title"]) {
+            pull_request_urls.extend(collect_github_pull_request_urls(&title));
+        }
+    }
+    pull_request_urls.sort();
+    pull_request_urls.dedup();
+
+    Some(ActionCenterLinearIssue {
+        identifier,
+        title: json_str(issue, &["title"]),
+        url: json_str(issue, &["url"]),
+        status: status.clone(),
+        state_type: json_str(issue, &["state", "type"]),
+        is_uat: status.eq_ignore_ascii_case("UAT"),
+        assignee: json_optional_str(issue, &["assignee", "displayName"])
+            .or_else(|| json_optional_str(issue, &["assignee", "name"])),
+        labels,
+        pull_request_urls,
+        unacked_comments: action_center_linear_unacked_comments(issue),
+        updated_at: json_optional_str(issue, &["updatedAt"]),
+        action_timestamp: action_center_linear_timestamp(issue),
+    })
+}
+
+async fn fetch_action_center_linear_issues() -> Result<ActionCenterLinearIssueResponse, String> {
+    let Some(api_key) = get_linear_api_key() else {
+        return Err("Linear API key not configured".to_string());
+    };
+
+    let team_key = env::var("BORABR_LINEAR_TEAM").unwrap_or_else(|_| "ENG".to_string());
+    let team_key_json = serde_json::to_string(&team_key).unwrap_or_else(|_| "\"ENG\"".to_string());
+    let query = format!(
+        r#"
+query {{
+  viewer {{
+    name
+    displayName
+    assignedIssues(
+      filter: {{
+        team: {{ key: {{ eq: {} }} }}
+        state: {{ type: {{ in: ["started", "unstarted"] }} }}
+      }}
+      first: 50
+    ) {{
+      nodes {{
+        identifier
+        title
+        url
+        updatedAt
+        state {{ name type }}
+        stateHistory(first: 1) {{ nodes {{ startedAt }} }}
+        priority
+        priorityLabel
+        assignee {{ name displayName }}
+        labels {{ nodes {{ name }} }}
+        attachments {{ nodes {{ title url }} }}
+        comments {{ nodes {{ user {{ isMe }} reactions {{ id }} children {{ nodes {{ id }} }} createdAt }} }}
+      }}
+    }}
+  }}
+}}
+"#,
+        team_key_json
+    );
+
+    let client = reqwest::Client::builder()
+        .user_agent("BoraBR")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    let response = client
+        .post("https://api.linear.app/graphql")
+        .header("Authorization", api_key)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "query": query }))
+        .send()
+        .await
+        .map_err(|e| format!("Linear API request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Linear API request returned status: {}", response.status()));
+    }
+
+    let payload: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Linear API response: {}", e))?;
+    if let Some(errors) = payload.get("errors").and_then(|errors| errors.as_array()) {
+        if !errors.is_empty() {
+            return Err(format!("Linear API returned {} error(s)", errors.len()));
+        }
+    }
+
+    let viewer = payload
+        .get("data")
+        .and_then(|data| data.get("viewer"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let assignee = json_optional_str(&viewer, &["displayName"])
+        .or_else(|| json_optional_str(&viewer, &["name"]));
+    let mut issues: Vec<ActionCenterLinearIssue> = json_nodes(&viewer, &["assignedIssues", "nodes"])
+        .into_iter()
+        .filter_map(action_center_linear_issue_from_value)
+        .collect();
+    issues.sort_by(|a, b| {
+        a.action_timestamp
+            .cmp(&b.action_timestamp)
+            .then_with(|| a.identifier.cmp(&b.identifier))
+    });
+
+    Ok(ActionCenterLinearIssueResponse {
+        team_key,
+        assignee,
+        error: None,
+        issues,
+    })
+}
+
+async fn cached_action_center_linear_issues() -> Result<ActionCenterLinearIssueResponse, String> {
+    if let Some(entry) = LINEAR_ACTION_CENTER_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| cache.clone())
+    {
+        if entry.fetched_at.elapsed() <= LINEAR_ACTION_CENTER_CACHE_TTL {
+            return Ok(entry.response);
+        }
+    }
+
+    let response = fetch_action_center_linear_issues().await?;
+    if let Ok(mut cache) = LINEAR_ACTION_CENTER_CACHE.lock() {
+        *cache = Some(LinearActionCenterCacheEntry {
+            fetched_at: Instant::now(),
+            response: response.clone(),
+        });
+    }
+    Ok(response)
+}
+
 fn candidate_from_path(
     root_path: &str,
     path: &std::path::Path,
@@ -4403,6 +5125,79 @@ async fn discover_project_worktrees(project_path: String) -> Result<Vec<ProjectW
     );
 
     Ok(candidates.into_iter().map(ProjectWorktree::from).collect())
+}
+
+#[tauri::command]
+async fn list_project_github_pull_requests(
+    project_path: String,
+) -> Result<ActionCenterGitHubPullRequestResponse, String> {
+    let project_path_buf = expand_user_path(&project_path)
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve project path: {}", e))?;
+
+    let root_output = run_git(&project_path_buf, &["rev-parse", "--show-toplevel"])
+        .map_err(|e| format!("Cannot resolve git root: {}", e))?;
+    let root_path_buf = PathBuf::from(root_output.trim())
+        .canonicalize()
+        .map_err(|e| format!("Cannot canonicalize git root: {}", e))?;
+
+    let Some(remote) = git_remote_url(&root_path_buf) else {
+        return Ok(ActionCenterGitHubPullRequestResponse {
+            project_path,
+            repo_full_name: None,
+            error: None,
+            pull_requests: Vec::new(),
+        });
+    };
+
+    let Some((owner, repo)) = github_owner_repo_from_remote(&remote) else {
+        return Ok(ActionCenterGitHubPullRequestResponse {
+            project_path,
+            repo_full_name: None,
+            error: None,
+            pull_requests: Vec::new(),
+        });
+    };
+
+    let repo_full_name = format!("{}/{}", owner, repo);
+    match cached_action_center_github_pull_requests(&owner, &repo).await {
+        Ok((repo_full_name, pull_requests)) => Ok(ActionCenterGitHubPullRequestResponse {
+            project_path,
+            repo_full_name: Some(repo_full_name),
+            error: None,
+            pull_requests,
+        }),
+        Err(error) => {
+            log_warn!(
+                "[action-center] GitHub PR list unavailable for {}: {}",
+                repo_full_name,
+                error
+            );
+            Ok(ActionCenterGitHubPullRequestResponse {
+                project_path,
+                repo_full_name: Some(repo_full_name),
+                error: Some(error),
+                pull_requests: Vec::new(),
+            })
+        }
+    }
+}
+
+#[tauri::command]
+async fn list_action_center_linear_issues() -> Result<ActionCenterLinearIssueResponse, String> {
+    let team_key = env::var("BORABR_LINEAR_TEAM").unwrap_or_else(|_| "ENG".to_string());
+    match cached_action_center_linear_issues().await {
+        Ok(response) => Ok(response),
+        Err(error) => {
+            log_warn!("[action-center] Linear issue list unavailable: {}", error);
+            Ok(ActionCenterLinearIssueResponse {
+                team_key,
+                assignee: None,
+                error: Some(error),
+                issues: Vec::new(),
+            })
+        }
+    }
 }
 
 #[tauri::command]
@@ -6266,6 +7061,8 @@ pub fn run() {
             bd_dep_remove_relation,
             bd_available_relation_types,
             discover_project_worktrees,
+            list_project_github_pull_requests,
+            list_action_center_linear_issues,
             fs_exists,
             fs_list,
             check_for_updates,
@@ -6600,6 +7397,169 @@ prunable gitdir file points to non-existent location
         }];
 
         assert_eq!(select_project_worktree_pull_request(&pull_requests, now), None);
+    }
+
+    #[test]
+    fn action_center_github_review_state_prefers_changes_requested() {
+        let reviews = vec![
+            GitHubPullRequestReview {
+                state: "APPROVED".to_string(),
+                user: Some(GitHubRepoPullRequestUser {
+                    login: Some("reviewer-a".to_string()),
+                }),
+            },
+            GitHubPullRequestReview {
+                state: "CHANGES_REQUESTED".to_string(),
+                user: Some(GitHubRepoPullRequestUser {
+                    login: Some("reviewer-b".to_string()),
+                }),
+            },
+        ];
+
+        assert_eq!(
+            derive_action_center_github_review_state(false, 0, 0, 0, &reviews),
+            "changes_requested",
+        );
+    }
+
+    #[test]
+    fn action_center_github_pull_request_normalizes_fifo_signal() {
+        let pr = GitHubRepoPullRequest {
+            number: 42,
+            title: "ENG-123 Add UAT action".to_string(),
+            url: "https://github.com/entrc/entrc-backend/pull/42".to_string(),
+            state: "open".to_string(),
+            draft: false,
+            user: Some(GitHubRepoPullRequestUser {
+                login: Some("aryrabelo".to_string()),
+            }),
+            head: Some(GitHubRepoPullRequestHead {
+                ref_name: Some("ENG-123-uat-action".to_string()),
+            }),
+            comments: Some(2),
+            review_comments: Some(1),
+            requested_reviewers: Vec::new(),
+            created_at: Some("2026-05-01T10:00:00Z".to_string()),
+            updated_at: Some("2026-05-01T12:00:00Z".to_string()),
+        };
+        let reviews = vec![GitHubPullRequestReview {
+            state: "APPROVED".to_string(),
+            user: Some(GitHubRepoPullRequestUser {
+                login: Some("reviewer".to_string()),
+            }),
+        }];
+
+        let signal = action_center_github_pr_from_github(
+            "entrc",
+            "entrc-backend",
+            &pr,
+            &reviews,
+        );
+
+        assert_eq!(signal.repo_full_name, "entrc/entrc-backend");
+        assert_eq!(signal.branch, "ENG-123-uat-action");
+        assert_eq!(signal.author, "aryrabelo");
+        assert_eq!(signal.review_state, "approved");
+        assert_eq!(
+            signal.action_timestamp,
+            parse_github_timestamp_millis("2026-05-01T10:00:00Z").unwrap(),
+        );
+    }
+
+    #[test]
+    fn action_center_github_pull_request_relevance_requires_author_or_requested_reviewer() {
+        let unrelated_pr = GitHubRepoPullRequest {
+            number: 9865,
+            title: "fix: Fix package source harvest definition".to_string(),
+            url: "https://github.com/entrc/entrc-backend/pull/9865".to_string(),
+            state: "open".to_string(),
+            draft: false,
+            user: Some(GitHubRepoPullRequestUser {
+                login: Some("guimello".to_string()),
+            }),
+            head: Some(GitHubRepoPullRequestHead {
+                ref_name: Some("fix/source-harvests".to_string()),
+            }),
+            comments: Some(0),
+            review_comments: Some(0),
+            requested_reviewers: Vec::new(),
+            created_at: Some("2025-02-10T11:12:58Z".to_string()),
+            updated_at: Some("2026-04-08T00:32:16Z".to_string()),
+        };
+        assert!(!is_action_center_github_pr_relevant(&unrelated_pr, "aryrabelo"));
+
+        let authored_pr = GitHubRepoPullRequest {
+            user: Some(GitHubRepoPullRequestUser {
+                login: Some("AryRabelo".to_string()),
+            }),
+            ..unrelated_pr
+        };
+        assert!(is_action_center_github_pr_relevant(&authored_pr, "aryrabelo"));
+
+        let review_requested_pr = GitHubRepoPullRequest {
+            user: Some(GitHubRepoPullRequestUser {
+                login: Some("teammate".to_string()),
+            }),
+            requested_reviewers: vec![GitHubRepoPullRequestUser {
+                login: Some("aryrabelo".to_string()),
+            }],
+            ..authored_pr
+        };
+        assert!(is_action_center_github_pr_relevant(
+            &review_requested_pr,
+            "aryrabelo",
+        ));
+    }
+
+    #[test]
+    fn action_center_linear_issue_normalizes_status_links_and_comments() {
+        let issue = serde_json::json!({
+            "identifier": "ENG-123",
+            "title": "Move approved PR to UAT",
+            "url": "https://linear.app/canix/issue/ENG-123/move-approved-pr-to-uat",
+            "updatedAt": "2026-05-01T12:30:00Z",
+            "state": { "name": "UAT", "type": "started" },
+            "stateHistory": { "nodes": [{ "startedAt": "2026-05-01T12:00:00Z" }] },
+            "assignee": { "displayName": "Ary Rabelo" },
+            "labels": { "nodes": [{ "name": "backend" }] },
+            "attachments": {
+                "nodes": [{
+                    "title": "GitHub PR",
+                    "url": "https://github.com/entrc/entrc-backend/pull/42"
+                }]
+            },
+            "comments": {
+                "nodes": [
+                    {
+                        "user": { "isMe": false },
+                        "reactions": [],
+                        "children": { "nodes": [] }
+                    },
+                    {
+                        "user": { "isMe": true },
+                        "reactions": [],
+                        "children": { "nodes": [] }
+                    }
+                ]
+            }
+        });
+
+        let signal = action_center_linear_issue_from_value(&issue).unwrap();
+
+        assert_eq!(signal.identifier, "ENG-123");
+        assert_eq!(signal.status, "UAT");
+        assert!(signal.is_uat);
+        assert_eq!(signal.assignee.as_deref(), Some("Ary Rabelo"));
+        assert_eq!(signal.labels, vec!["backend"]);
+        assert_eq!(
+            signal.pull_request_urls,
+            vec!["https://github.com/entrc/entrc-backend/pull/42"],
+        );
+        assert_eq!(signal.unacked_comments, 1);
+        assert_eq!(
+            signal.action_timestamp,
+            parse_github_timestamp_millis("2026-05-01T12:00:00Z").unwrap(),
+        );
     }
 
     #[test]

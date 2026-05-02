@@ -49,6 +49,21 @@ describe('terminal helpers', () => {
       .toContain('--add-label "blocked:needs_answer"')
   })
 
+  it('sets cmux surface as assignee when starting an issue from helper commands', () => {
+    const helpers = buildTerminalHelperCommands({
+      id: 'borabr-m0z.4',
+      title: 'Add Beads workflow helpers',
+    })
+    const startCommand = helpers.find(helper => helper.id === 'start')?.command
+
+    expect(startCommand).toContain('SURFACE_ID="${CMUX_SURFACE_ID:-${CANIX_PANEL_ID:-${CMUX_PANEL_ID:-}}}"')
+    expect(startCommand).toContain('ASSIGNEE="cmux:${SURFACE_ID}"')
+    expect(startCommand).toContain('br update --actor "$ACTOR" \'borabr-m0z.4\' --status in_progress --assignee "$ASSIGNEE" --json')
+    expect(startCommand).toContain('else br update --actor "$ACTOR" \'borabr-m0z.4\' --status in_progress --claim --json')
+    expect(startCommand).not.toContain('then &&')
+    expect(startCommand).not.toContain('else &&')
+  })
+
   it('prefers deterministic workflow commands when a workflow label is present', () => {
     const helpers = buildTerminalHelperCommands({
       id: 'borabr-m0z.9',

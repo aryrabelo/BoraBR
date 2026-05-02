@@ -1,12 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import type { Issue } from '~/types/issue'
 import {
+  buildActionCenterGitHubPullRequestState,
   buildActionCenterIssuePrompt,
+  buildActionCenterLinearIssueState,
   buildActionCenterProjectActionState,
   buildActionCenterProjectIdleState,
+  buildActionCenterReconciledActions,
   countActionCenterInProgressIssues,
   pickVisibleActionCenterItems,
 } from '~/utils/action-center'
+import type { ActionCenterGitHubPullRequest, ActionCenterLinearIssue } from '~/utils/bd-api'
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -22,6 +26,47 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     comments: [],
     ...overrides,
   } as Issue
+}
+
+function makePullRequest(overrides: Partial<ActionCenterGitHubPullRequest> = {}): ActionCenterGitHubPullRequest {
+  return {
+    repoFullName: 'entrc/entrc-backend',
+    owner: 'entrc',
+    repo: 'entrc-backend',
+    number: 42,
+    title: 'ENG-123 Add UAT action',
+    url: 'https://github.com/entrc/entrc-backend/pull/42',
+    state: 'open',
+    branch: 'ENG-123-uat-action',
+    author: 'aryrabelo',
+    isDraft: false,
+    reviewState: 'approved',
+    comments: 0,
+    reviewComments: 0,
+    requestedReviewers: 0,
+    createdAt: '2026-05-01T10:00:00Z',
+    updatedAt: '2026-05-01T12:00:00Z',
+    actionTimestamp: Date.parse('2026-05-01T10:00:00Z'),
+    ...overrides,
+  }
+}
+
+function makeLinearIssue(overrides: Partial<ActionCenterLinearIssue> = {}): ActionCenterLinearIssue {
+  return {
+    identifier: 'ENG-123',
+    title: 'Move approved PR to UAT',
+    url: 'https://linear.app/canix/issue/ENG-123/move-approved-pr-to-uat',
+    status: 'In Progress',
+    stateType: 'started',
+    isUat: false,
+    assignee: 'Ary Rabelo',
+    labels: ['backend'],
+    pullRequestUrls: [],
+    unackedComments: 0,
+    updatedAt: '2026-05-01T12:00:00Z',
+    actionTimestamp: Date.parse('2026-05-01T12:00:00Z'),
+    ...overrides,
+  }
 }
 
 describe('Action Center project state', () => {
@@ -114,5 +159,254 @@ describe('Action Center project state', () => {
     })
 
     expect(state).toBeNull()
+  })
+
+  it('normalizes open GitHub PRs for Action Center ordering', () => {
+    const state = buildActionCenterGitHubPullRequestState({
+      projectPath: '/Users/aryrabelo/Sites/entrc-backend',
+      projectName: 'entrc-backend',
+      response: {
+        projectPath: '/Users/aryrabelo/Sites/entrc-backend',
+        repoFullName: 'entrc/entrc-backend',
+        error: null,
+        pullRequests: [
+          {
+            repoFullName: 'entrc/entrc-backend',
+            owner: 'entrc',
+            repo: 'entrc-backend',
+            number: 42,
+            title: 'ENG-123 Add UAT action',
+            url: 'https://github.com/entrc/entrc-backend/pull/42',
+            state: 'open',
+            branch: 'ENG-123-uat-action',
+            author: 'aryrabelo',
+            isDraft: false,
+            reviewState: 'approved',
+            comments: 2,
+            reviewComments: 1,
+            requestedReviewers: 0,
+            createdAt: '2026-05-01T10:00:00Z',
+            updatedAt: '2026-05-01T12:00:00Z',
+            actionTimestamp: Date.parse('2026-05-01T10:00:00Z'),
+          },
+          {
+            repoFullName: 'entrc/entrc-backend',
+            owner: 'entrc',
+            repo: 'entrc-backend',
+            number: 41,
+            title: 'Closed PR',
+            url: 'https://github.com/entrc/entrc-backend/pull/41',
+            state: 'closed',
+            branch: 'ENG-122-closed',
+            author: 'aryrabelo',
+            isDraft: false,
+            reviewState: 'pending_review',
+            comments: 0,
+            reviewComments: 0,
+            requestedReviewers: 0,
+            createdAt: '2026-05-01T09:00:00Z',
+            updatedAt: '2026-05-01T09:30:00Z',
+            actionTimestamp: Date.parse('2026-05-01T09:00:00Z'),
+          },
+        ],
+      },
+    })
+
+    expect(state.error).toBeNull()
+    expect(state.pullRequests).toHaveLength(1)
+    const firstPullRequest = state.pullRequests[0]!
+    expect(firstPullRequest).toMatchObject({
+      repoFullName: 'entrc/entrc-backend',
+      number: 42,
+      branch: 'ENG-123-uat-action',
+      author: 'aryrabelo',
+      reviewState: 'approved',
+    })
+    expect(firstPullRequest.actionTimestamp).toBe(Date.parse('2026-05-01T10:00:00Z'))
+  })
+
+  it('keeps GitHub API errors as recoverable Action Center state', () => {
+    const state = buildActionCenterGitHubPullRequestState({
+      projectPath: '/repo',
+      projectName: 'Repo',
+      response: {
+        projectPath: '/repo',
+        repoFullName: 'acme/repo',
+        error: 'GitHub PR request returned status: 401 Unauthorized',
+        pullRequests: [],
+      },
+    })
+
+    expect(state.error).toBe('GitHub PR request returned status: 401 Unauthorized')
+    expect(state.pullRequests).toEqual([])
+  })
+
+  it('normalizes Linear issues with status and PR links', () => {
+    const state = buildActionCenterLinearIssueState({
+      response: {
+        teamKey: 'ENG',
+        assignee: 'Ary Rabelo',
+        error: null,
+        issues: [
+          {
+            identifier: 'ENG-123',
+            title: 'Move approved PR to UAT',
+            url: 'https://linear.app/canix/issue/ENG-123/move-approved-pr-to-uat',
+            status: 'UAT',
+            stateType: 'started',
+            isUat: true,
+            assignee: 'Ary Rabelo',
+            labels: ['backend'],
+            pullRequestUrls: ['https://github.com/entrc/entrc-backend/pull/42'],
+            unackedComments: 1,
+            updatedAt: '2026-05-01T12:00:00Z',
+            actionTimestamp: Date.parse('2026-05-01T12:00:00Z'),
+          },
+          {
+            identifier: 'ENG-124',
+            title: 'Needs implementation',
+            url: 'https://linear.app/canix/issue/ENG-124/needs-implementation',
+            status: 'In Progress',
+            stateType: 'started',
+            isUat: false,
+            assignee: 'Ary Rabelo',
+            labels: [],
+            pullRequestUrls: [],
+            unackedComments: 0,
+            updatedAt: '2026-05-01T11:00:00Z',
+            actionTimestamp: Date.parse('2026-05-01T11:00:00Z'),
+          },
+        ],
+      },
+    })
+
+    expect(state.error).toBeNull()
+    expect(state.issues.map(issue => issue.identifier)).toEqual(['ENG-124', 'ENG-123'])
+    expect(state.issues[1]!.isUat).toBe(true)
+    expect(state.issues[1]!.pullRequestUrls).toEqual(['https://github.com/entrc/entrc-backend/pull/42'])
+  })
+
+  it('keeps Linear API errors as recoverable Action Center state', () => {
+    const state = buildActionCenterLinearIssueState({
+      response: {
+        teamKey: 'ENG',
+        assignee: null,
+        error: 'Linear API key not configured',
+        issues: [],
+      },
+    })
+
+    expect(state.error).toBe('Linear API key not configured')
+    expect(state.issues).toEqual([])
+  })
+
+  it('reconciles an approved GitHub PR with a non-UAT Linear ticket', () => {
+    const actions = buildActionCenterReconciledActions({
+      githubPullRequestStates: [{
+        projectPath: '/Users/aryrabelo/Sites/entrc-backend',
+        projectName: 'entrc-backend',
+        repoFullName: 'entrc/entrc-backend',
+        error: null,
+        pullRequests: [makePullRequest()],
+      }],
+      linearIssueState: {
+        teamKey: 'ENG',
+        assignee: 'Ary Rabelo',
+        error: null,
+        issues: [makeLinearIssue()],
+      },
+    })
+
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toMatchObject({
+      nextActionKind: 'move_linear_to_uat',
+      primaryTarget: 'linear',
+      title: 'ENG-123: mover Linear para UAT',
+      originSources: ['github', 'linear'],
+    })
+  })
+
+  it('creates follow-up actions for Linear tickets without matching PRs', () => {
+    const actions = buildActionCenterReconciledActions({
+      githubPullRequestStates: [],
+      linearIssueState: {
+        teamKey: 'ENG',
+        assignee: 'Ary Rabelo',
+        error: null,
+        issues: [makeLinearIssue({ identifier: 'ENG-124', pullRequestUrls: [] })],
+      },
+    })
+
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toMatchObject({
+      nextActionKind: 'linear_missing_pr',
+      primaryTarget: 'linear',
+      title: 'ENG-124: criar ou vincular PR',
+      originSources: ['linear'],
+    })
+  })
+
+  it('uses Linear PR URLs to reconcile GitHub actions back to tickets', () => {
+    const pullRequest = makePullRequest({
+      number: 77,
+      title: 'No ticket id in title',
+      branch: 'feature/no-ticket-id',
+      url: 'https://github.com/entrc/entrc-backend/pull/77',
+      reviewState: 'changes_requested',
+      comments: 1,
+      actionTimestamp: Date.parse('2026-05-01T09:00:00Z'),
+    })
+    const actions = buildActionCenterReconciledActions({
+      githubPullRequestStates: [{
+        projectPath: '/Users/aryrabelo/Sites/entrc-backend',
+        projectName: 'entrc-backend',
+        repoFullName: 'entrc/entrc-backend',
+        error: null,
+        pullRequests: [pullRequest],
+      }],
+      linearIssueState: {
+        teamKey: 'ENG',
+        assignee: 'Ary Rabelo',
+        error: null,
+        issues: [makeLinearIssue({
+          identifier: 'ENG-125',
+          pullRequestUrls: ['https://github.com/entrc/entrc-backend/pull/77/'],
+        })],
+      },
+    })
+
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toMatchObject({
+      nextActionKind: 'github_pr_attention',
+      primaryTarget: 'github',
+      title: '#77: tratar pendência do PR',
+      originSources: ['github', 'linear'],
+    })
+  })
+
+  it('keeps GitHub PRs without Linear matches as link actions', () => {
+    const actions = buildActionCenterReconciledActions({
+      githubPullRequestStates: [{
+        projectPath: '/Users/aryrabelo/Sites/entrc-backend',
+        projectName: 'entrc-backend',
+        repoFullName: 'entrc/entrc-backend',
+        error: null,
+        pullRequests: [makePullRequest({ branch: 'no-ticket-id', title: 'Small fix' })],
+      }],
+      linearIssueState: {
+        teamKey: 'ENG',
+        assignee: 'Ary Rabelo',
+        error: null,
+        issues: [],
+      },
+    })
+
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toMatchObject({
+      nextActionKind: 'github_pr_unlinked',
+      primaryTarget: 'github',
+      title: '#42: vincular PR ao Linear',
+      originSources: ['github'],
+    })
   })
 })

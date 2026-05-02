@@ -44,17 +44,31 @@ import {
   TooltipTrigger,
 } from '~/components/ui/tooltip'
 import { Bell, ArrowLeft, Copy, SquareTerminal } from 'lucide-vue-next'
-import { cmuxFocusSurface, cmuxSendPrompt } from '~/utils/bd-api'
+import {
+  cmuxFocusSurface,
+  cmuxSendPrompt,
+  listActionCenterLinearIssues,
+  listProjectGitHubPullRequests,
+  type ActionCenterGitHubPullRequest,
+  type ActionCenterLinearIssue,
+} from '~/utils/bd-api'
 import { resolveTaskTerminalSource } from '~/utils/task-terminal-source'
 import { getFolderName } from '~/utils/path'
+import { openUrl } from '~/utils/open-url'
 import {
+  buildActionCenterGitHubPullRequestState,
   buildActionCenterIssuePrompt,
+  buildActionCenterLinearIssueState,
   buildActionCenterProjectActionState,
   buildActionCenterProjectIdleState,
+  buildActionCenterReconciledActions,
   normalizeActionCenterProjectPath,
   pickVisibleActionCenterItems,
+  type ActionCenterGitHubPullRequestState,
+  type ActionCenterLinearIssueState,
   type ActionCenterProjectActionState,
   type ActionCenterProjectIdleState,
+  type ActionCenterReconciledAction,
 } from '~/utils/action-center'
 
 // Composables
@@ -195,7 +209,7 @@ const PROJECT_IDLE_THRESHOLD_MS = 5 * 60 * 1000
 const ACTION_CENTER_PROJECT_POLL_MS = 60 * 1000
 const ACTION_CENTER_VISIBLE_LIMIT = 3
 
-type ActionCenterSource = 'br' | 'github' | 'other'
+type ActionCenterSource = 'br' | 'next_action' | 'github' | 'linear' | 'other'
 
 interface ActionCenterIssueItem extends Issue {
   actionKind: 'issue'
@@ -221,27 +235,78 @@ interface ActionCenterProjectIdleItem {
   actionTimestamp: number
 }
 
-type ActionCenterItem = ActionCenterIssueItem | ActionCenterProjectIdleItem
+interface ActionCenterReconciledItem extends ActionCenterReconciledAction {
+  actionKind: 'next_action'
+  actionId: string
+  id: string
+  title: string
+  description: string
+  projectPath: string
+  projectName: string
+  actionSource: 'next_action'
+  actionSourceLabel: string
+}
+
+interface ActionCenterGitHubErrorItem {
+  actionKind: 'github_error'
+  actionId: string
+  id: string
+  title: string
+  description: string
+  projectPath: string
+  projectName: string
+  actionSource: 'github'
+  actionSourceLabel: string
+  actionTimestamp: number
+}
+
+interface ActionCenterLinearErrorItem {
+  actionKind: 'linear_error'
+  actionId: string
+  id: string
+  title: string
+  description: string
+  projectPath: string
+  projectName: string
+  actionSource: 'linear'
+  actionSourceLabel: string
+  actionTimestamp: number
+}
+
+type ActionCenterItem =
+  | ActionCenterIssueItem
+  | ActionCenterProjectIdleItem
+  | ActionCenterReconciledItem
+  | ActionCenterGitHubErrorItem
+  | ActionCenterLinearErrorItem
 
 type ProjectIdleState = ActionCenterProjectIdleState
 type ProjectActionState = ActionCenterProjectActionState
+type ProjectGitHubPullRequestState = ActionCenterGitHubPullRequestState
+type LinearIssueState = ActionCenterLinearIssueState
 
 const actionSourceOrder: Record<ActionCenterSource, number> = {
   br: 0,
-  github: 1,
-  other: 2,
+  next_action: 1,
+  github: 2,
+  linear: 3,
+  other: 4,
 }
 
 const actionSourceLabel: Record<ActionCenterSource, string> = {
   br: 'BR',
+  next_action: 'Next Action',
   github: 'GitHub',
+  linear: 'Linear',
   other: 'Outros',
 }
 
 const actionBadgeClass: Record<ActionCenterSource, string> = {
   br: 'border-blue-500/40 text-blue-600 bg-blue-500/10',
+  next_action: 'border-emerald-500/40 text-emerald-600 bg-emerald-500/10',
   github: 'border-violet-500/40 text-violet-600 bg-violet-500/10',
-  other: 'border-emerald-500/40 text-emerald-600 bg-emerald-500/10',
+  linear: 'border-amber-500/40 text-amber-600 bg-amber-500/10',
+  other: 'border-slate-500/40 text-slate-600 bg-slate-500/10',
 }
 
 const inferActionSource = (issue: Issue): ActionCenterSource => {
@@ -273,6 +338,8 @@ const normalizeProjectPath = normalizeActionCenterProjectPath
 const actionCenterNow = ref(Date.now())
 const projectIdleStates = ref<Record<string, ProjectIdleState>>({})
 const projectActionStates = ref<Record<string, ProjectActionState>>({})
+const projectGitHubPullRequestStates = ref<Record<string, ProjectGitHubPullRequestState>>({})
+const linearIssueState = ref<LinearIssueState | null>(null)
 const dismissedActionCenterItems = useLocalStorage<Record<string, boolean>>('borabr:action-center:dismissed', {})
 const snoozedActionCenterItems = useLocalStorage<Record<string, number>>('borabr:action-center:snoozed', {})
 const isRefreshingProjectIdle = ref(false)
@@ -299,6 +366,126 @@ const readyActionItems = computed<ActionCenterIssueItem[]>(() => {
     })
 })
 
+const githubPullRequestErrorItems = computed<ActionCenterGitHubErrorItem[]>(() => {
+  return Object.values(projectGitHubPullRequestStates.value)
+    .filter(projectState => projectState.error)
+    .map(projectState => ({
+      actionKind: 'github_error' as const,
+      actionId: `github-error:${normalizeProjectPath(projectState.projectPath)}:${projectState.repoFullName ?? 'unknown'}:${projectState.error}`,
+      id: `github-error:${normalizeProjectPath(projectState.projectPath)}`,
+      title: `GitHub indisponivel: ${projectState.projectName}`,
+      description: projectState.error ?? 'Nao foi possivel carregar PRs abertas.',
+      projectPath: projectState.projectPath,
+      projectName: projectState.projectName,
+      actionSource: 'github',
+      actionSourceLabel: actionSourceLabel.github,
+      actionTimestamp: actionCenterNow.value,
+    }))
+})
+
+const findGitHubPullRequestProject = (pullRequest: ActionCenterGitHubPullRequest) => {
+  for (const projectState of Object.values(projectGitHubPullRequestStates.value)) {
+    const hasMatchingPullRequest = projectState.pullRequests.some(projectPullRequest =>
+      projectPullRequest.repoFullName === pullRequest.repoFullName
+      && projectPullRequest.number === pullRequest.number,
+    )
+    if (hasMatchingPullRequest) {
+      return {
+        projectPath: projectState.projectPath,
+        projectName: projectState.projectName,
+      }
+    }
+  }
+
+  const currentProject = projects.value.find(project =>
+    normalizeProjectPath(project.path) === normalizeProjectPath(beadsPath.value || ''),
+  )
+  const fallbackProject = currentProject ?? projects.value[0]
+  return {
+    projectPath: fallbackProject?.path ?? beadsPath.value ?? '',
+    projectName: fallbackProject?.name ?? pullRequest.repo,
+  }
+}
+
+const findLinearIssueProject = (issue: ActionCenterLinearIssue) => {
+  for (const projectState of Object.values(projectGitHubPullRequestStates.value)) {
+    const repoFullName = projectState.repoFullName
+    if (!repoFullName) continue
+    const hasMatchingPullRequest = issue.pullRequestUrls.some(url =>
+      url.includes(`github.com/${repoFullName}/pull/`),
+    )
+    if (hasMatchingPullRequest) {
+      return {
+        projectPath: projectState.projectPath,
+        projectName: projectState.projectName,
+      }
+    }
+  }
+
+  const currentProject = projects.value.find(project =>
+    normalizeProjectPath(project.path) === normalizeProjectPath(beadsPath.value || ''),
+  )
+  const fallbackProject = currentProject ?? projects.value[0]
+  return {
+    projectPath: fallbackProject?.path ?? beadsPath.value ?? '',
+    projectName: fallbackProject?.name ?? 'Linear',
+  }
+}
+
+const reconciledNextActionItems = computed<ActionCenterReconciledItem[]>(() => {
+  return buildActionCenterReconciledActions({
+    githubPullRequestStates: Object.values(projectGitHubPullRequestStates.value),
+    linearIssueState: linearIssueState.value,
+  }).map((action) => {
+    const project = action.githubPullRequest
+      ? findGitHubPullRequestProject(action.githubPullRequest)
+      : action.linearIssue
+        ? findLinearIssueProject(action.linearIssue)
+        : {
+            projectPath: beadsPath.value ?? '',
+            projectName: 'Next Action',
+          }
+    return {
+      ...action,
+      actionKind: 'next_action' as const,
+      actionId: [
+        'next-action',
+        normalizeProjectPath(project.projectPath),
+        action.actionKey,
+      ].join(':'),
+      id: action.actionKey,
+      title: action.title,
+      description: action.description,
+      projectPath: project.projectPath,
+      projectName: project.projectName,
+      actionSource: 'next_action',
+      actionSourceLabel: actionSourceLabel.next_action,
+    }
+  })
+})
+
+const linearIssueErrorItems = computed<ActionCenterLinearErrorItem[]>(() => {
+  const state = linearIssueState.value
+  if (!state?.error) return []
+
+  const fallbackProject = projects.value.find(project =>
+    normalizeProjectPath(project.path) === normalizeProjectPath(beadsPath.value || ''),
+  ) ?? projects.value[0]
+
+  return [{
+    actionKind: 'linear_error' as const,
+    actionId: `linear-error:${state.teamKey}:${state.error}`,
+    id: `linear-error:${state.teamKey}`,
+    title: `Linear indisponivel: ${state.teamKey}`,
+    description: state.error,
+    projectPath: fallbackProject?.path ?? beadsPath.value ?? '',
+    projectName: fallbackProject?.name ?? 'Linear',
+    actionSource: 'linear',
+    actionSourceLabel: actionSourceLabel.linear,
+    actionTimestamp: actionCenterNow.value,
+  }]
+})
+
 const projectIdleActionItems = computed<ActionCenterProjectIdleItem[]>(() => {
   return Object.entries(projectIdleStates.value)
     .filter(([, state]) => actionCenterNow.value - state.idleSince >= PROJECT_IDLE_THRESHOLD_MS)
@@ -317,7 +504,13 @@ const projectIdleActionItems = computed<ActionCenterProjectIdleItem[]>(() => {
 })
 
 const actionCenterItems = computed<ActionCenterItem[]>(() => {
-  const items = [...projectIdleActionItems.value, ...readyActionItems.value]
+  const items = [
+    ...projectIdleActionItems.value,
+    ...readyActionItems.value,
+    ...reconciledNextActionItems.value,
+    ...githubPullRequestErrorItems.value,
+    ...linearIssueErrorItems.value,
+  ]
     .filter((item) => {
       if (dismissedActionCenterItems.value[item.actionId]) return false
       const snoozedUntil = snoozedActionCenterItems.value[item.actionId]
@@ -337,6 +530,13 @@ const actionCenterItems = computed<ActionCenterItem[]>(() => {
 })
 
 const actionCenterCount = computed(() => actionCenterItems.value.length)
+
+const getActionCenterPrimaryLabel = (item: ActionCenterItem) => {
+  if (item.actionKind === 'issue') return 'Abrir issue'
+  if (item.actionKind === 'next_action' && item.primaryTarget === 'github') return 'Abrir PR'
+  if (item.actionKind === 'next_action' && item.primaryTarget === 'linear') return 'Abrir Linear'
+  return 'Abrir projeto'
+}
 
 const formatActionDate = (timestamp: number) => {
   if (timestamp === Number.MAX_SAFE_INTEGER) return 'Data indisponível'
@@ -440,6 +640,8 @@ const refreshProjectIdleNotifications = async () => {
     if (!isBr.value || projects.value.length === 0) {
       projectIdleStates.value = {}
       projectActionStates.value = {}
+      projectGitHubPullRequestStates.value = {}
+      linearIssueState.value = null
     }
     return
   }
@@ -450,6 +652,7 @@ const refreshProjectIdleNotifications = async () => {
     const now = Date.now()
     const nextStates: Record<string, ProjectIdleState> = {}
     const nextActionStates: Record<string, ProjectActionState> = {}
+    const nextGitHubPullRequestStates: Record<string, ProjectGitHubPullRequestState> = {}
 
     for (const project of projects.value) {
       const projectKey = normalizeProjectPath(project.path)
@@ -481,6 +684,13 @@ const refreshProjectIdleNotifications = async () => {
             idleSince: idleState.idleSince,
           }
         }
+
+        const githubPullRequestResponse = await listProjectGitHubPullRequests(project.path)
+        nextGitHubPullRequestStates[projectKey] = buildActionCenterGitHubPullRequestState({
+          projectPath: project.path,
+          projectName: project.name,
+          response: githubPullRequestResponse,
+        })
       } catch {
         // Ignore projects that cannot be read by br.
       }
@@ -488,6 +698,10 @@ const refreshProjectIdleNotifications = async () => {
 
     projectIdleStates.value = nextStates
     projectActionStates.value = nextActionStates
+    projectGitHubPullRequestStates.value = nextGitHubPullRequestStates
+    linearIssueState.value = buildActionCenterLinearIssueState({
+      response: await listActionCenterLinearIssues(),
+    })
     actionCenterNow.value = now
   } finally {
     isRefreshingProjectIdle.value = false
@@ -751,7 +965,12 @@ const handleOpenActionProject = async (item: ActionCenterItem) => {
 const handleTakeActionItem = async (item: ActionCenterItem) => {
   handleCloseActionCenter()
   await switchToActionProject(item)
-  if (item.actionKind === 'project_idle') return
+  if (item.actionKind === 'project_idle' || item.actionKind === 'github_error' || item.actionKind === 'linear_error') return
+
+  if (item.actionKind === 'next_action') {
+    await openUrl(item.primaryUrl)
+    return
+  }
 
   await handleSelectIssue(item)
 }
@@ -1363,7 +1582,7 @@ watch(
                             </p>
                             <div class="mt-3 flex flex-wrap gap-2">
                               <Button size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
-                                {{ action.actionKind === 'project_idle' ? 'Abrir projeto' : 'Abrir issue' }}
+                                {{ getActionCenterPrimaryLabel(action) }}
                               </Button>
                               <Button
                                 v-if="action.actionKind === 'issue'"
@@ -1684,7 +1903,7 @@ watch(
                         </p>
                         <div class="mt-3 flex flex-wrap gap-2">
                           <Button size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
-                            {{ action.actionKind === 'project_idle' ? 'Abrir projeto' : 'Abrir issue' }}
+                            {{ getActionCenterPrimaryLabel(action) }}
                           </Button>
                           <Button
                             v-if="action.actionKind === 'issue'"
