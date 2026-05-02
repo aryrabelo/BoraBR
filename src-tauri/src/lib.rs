@@ -856,12 +856,21 @@ fn cmux_focus_surface_fallback_command(surface: &str) -> Vec<String> {
 }
 
 fn cmux_send_prompt_command(surface: &str, prompt: &str) -> Vec<String> {
-    vec![
-        "send".to_string(),
-        "--surface".to_string(),
-        surface.to_string(),
-        format!("{}\\n", prompt.trim()),
-    ]
+    if surface.starts_with("workspace:") {
+        vec![
+            "send".to_string(),
+            "--workspace".to_string(),
+            surface.to_string(),
+            format!("{}\\n", prompt.trim()),
+        ]
+    } else {
+        vec![
+            "send".to_string(),
+            "--surface".to_string(),
+            surface.to_string(),
+            format!("{}\\n", prompt.trim()),
+        ]
+    }
 }
 
 fn parse_workspace_ref_from_cmux_identify_output(stdout: &str) -> Option<String> {
@@ -3492,6 +3501,24 @@ async fn cmux_focus_surface(request: CmuxFocusSurfaceRequest) -> Result<CmuxFocu
 
     log::info!("[cmux] [task-terminal] requested focus for surface {}", surface);
 
+    if surface.starts_with("workspace:") {
+        let select_args = cmux_select_workspace_command(&surface);
+        log::info!("[cmux] [task-terminal] selecting workspace ref: {}", select_args.join(" "));
+        return match run_cmux(&select_args) {
+            Ok(output) if output.status.success() => Ok(CmuxFocusSurfaceResponse {
+                surface,
+                command: select_args.join(" "),
+                stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            }),
+            Ok(output) => Err(format!(
+                "cmux {} failed: {}",
+                select_args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim(),
+            )),
+            Err(error) => Err(error),
+        };
+    }
+
     let focus_args = cmux_focus_surface_command(&surface);
     log::info!("[cmux] [task-terminal] trying primary command: {}", focus_args.join(" "));
     match run_cmux(&focus_args) {
@@ -3631,12 +3658,80 @@ fn extract_worktree_path_from_error(stderr: &str) -> Option<String> {
     }
 }
 
-fn build_auto_mode_orchestrator_command(epic_id: &str, issue_id: &str, issue_title: &str) -> String {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutoModeDispatchScope {
+    branch: String,
+    worktree_name: String,
+    workspace_name: String,
+    is_epic: bool,
+}
+
+fn auto_mode_dispatch_scope(epic_id: &str, issue_id: &str) -> AutoModeDispatchScope {
+    if issue_id == epic_id {
+        AutoModeDispatchScope {
+            branch: format!("epic-{}", epic_id),
+            worktree_name: epic_id.to_string(),
+            workspace_name: format!("epic:{}", epic_id),
+            is_epic: true,
+        }
+    } else {
+        let task_name = format!("task-{}", issue_id);
+        AutoModeDispatchScope {
+            branch: task_name.clone(),
+            worktree_name: task_name,
+            workspace_name: format!("task:{}", issue_id),
+            is_epic: false,
+        }
+    }
+}
+
+fn build_auto_mode_executor_command(
+    epic_id: &str,
+    issue_id: &str,
+    issue_title: &str,
+    cmux_ref: &str,
+) -> String {
+    let assignee = format!("cmux:{}", cmux_ref);
     let prompt = format!(
-        "You are an executor for Beads task {issue_id} in epic {epic_id}. Task title: {issue_title}. First run `br show {issue_id}` and confirm the task is still open. Then claim it with `br update {issue_id} --status in_progress --claim --json`, implement only this task, run relevant tests, commit atomically, and close it with `br close {issue_id} --reason \"Implemented and verified\"`. Do not work unrelated tasks.",
+        "You are an executor for Beads task {issue_id} in epic {epic_id}. Task title: {issue_title}. This cmux workspace is {cmux_ref}; use BR assignee {assignee}. First run `br show {issue_id}`. Then claim/focus the task with `br update {issue_id} --status in_progress --assignee {assignee} --json`, implement only this task, run relevant tests, commit atomically on branch `task-{issue_id}`, and signal completion with a structured comment containing the commit hash. Do not work unrelated tasks and do not touch main directly.",
     );
 
     format!("claude {}", shell_single_quote(&prompt))
+}
+
+fn build_auto_mode_epic_orchestrator_command(epic_id: &str) -> String {
+    let prompt = format!(
+        "You are an orchestrator for Beads epic {epic_id}. Loop until no open ready child tasks remain. 1) Run `br ready --json` and filter to non-epic child tasks whose id starts with `{epic_id}.`; if you need the full open set, run `br list --json | jq '(.issues? // .)[] | select(.id | startswith(\"{epic_id}.\")) | select(.status==\"open\") | select(.issue_type!=\"epic\")'`. 2) Pick the highest-priority ready task; when multiple ready tasks have no dependencies, dispatch them in parallel with separate cmux workspaces and git worktrees named `task-<issue-id>` on branches `task-<issue-id>`. 3) Spawn a separate Claude executor per task with issue context; executors must claim, implement, test, commit atomically, add a structured executor-complete comment containing the commit hash, and avoid touching main directly. 4) After each executor completion signal, spawn an independent Claude reviewer with fresh context. The reviewer must run relevant tests/type-check/build, review the diff against `br show <issue-id>`, and produce a structured approve/request-changes verdict comment. 5) If review approves, merge the task branch into main. If merge conflicts or fails, abort the merge, report the conflict, and keep the worktree and issue open. If merge succeeds, remove the task worktree, delete the task branch when safe, close the BR issue, and run `br sync --flush-only`. If review requests changes, report findings back and keep the worktree and issue open for retry. Use agents for parallel work when dependencies allow.",
+    );
+
+    format!("claude {}", shell_single_quote(&prompt))
+}
+
+fn build_auto_mode_agent_command(
+    epic_id: &str,
+    issue_id: &str,
+    issue_title: &str,
+    cmux_ref: &str,
+) -> String {
+    if issue_id == epic_id {
+        build_auto_mode_epic_orchestrator_command(epic_id)
+    } else {
+        build_auto_mode_executor_command(epic_id, issue_id, issue_title, cmux_ref)
+    }
+}
+
+fn mark_auto_mode_issue_dispatched(project_path: &str, issue_id: &str, cmux_ref: &str) -> Result<(), String> {
+    let assignee = format!("cmux:{}", cmux_ref);
+    execute_bd(
+        "update",
+        &[
+            issue_id.to_string(),
+            "--status=in_progress".to_string(),
+            format!("--assignee={}", assignee),
+        ],
+        Some(project_path),
+    )?;
+    Ok(())
 }
 
 fn has_in_progress_non_epic_issue(issues: &[BdRawIssue]) -> bool {
@@ -3678,7 +3773,8 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
     // Derive epic ID: "borabr-unf.1" → "borabr-unf", epic itself stays as-is
     let epic_id = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
-    let branch = format!("epic-{}", epic_id);
+    let scope = auto_mode_dispatch_scope(epic_id, issue_id);
+    let branch = scope.branch.clone();
 
     // Resolve project root (follow worktree back to main repo)
     let project_path_raw = &request.project_path;
@@ -3699,7 +3795,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         return Err("auto-mode dispatch blocked: project already has in-progress work".to_string());
     }
 
-    // Worktree path: worktrees/{epic-id} (one per epic, shared by all tasks)
+    // Worktree path: worktrees/<scope> (task work uses task-<issue-id>)
     let worktrees_parent = format!("{}/../worktrees", project_path);
     let worktrees_parent_path = std::path::Path::new(&worktrees_parent);
     if !worktrees_parent_path.exists() {
@@ -3708,14 +3804,14 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     }
     let canonical_parent = worktrees_parent_path.canonicalize()
         .map_err(|e| format!("Failed to canonicalize worktrees dir: {}", e))?;
-    let canonical_worktree = canonical_parent.join(epic_id);
+    let canonical_worktree = canonical_parent.join(&scope.worktree_name);
     let mut worktree_dir = canonical_worktree.to_string_lossy().to_string();
 
     log::info!("[auto-mode] Dispatching epic {} (task {}) to worktree {}", epic_id, issue_id, worktree_dir);
 
-    // 1. Ensure epic worktree exists (one branch per epic, reused across tasks)
+    // 1. Ensure scoped worktree exists.
     if canonical_worktree.exists() {
-        log::info!("[auto-mode] Epic worktree already exists, reusing: {}", worktree_dir);
+        log::info!("[auto-mode] Scoped worktree already exists, reusing: {}", worktree_dir);
     } else {
         let worktree_output = new_command("git")
             .args(["worktree", "add", "-b", &branch, &worktree_dir, "HEAD"])
@@ -3748,7 +3844,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
                 return Err(format!("git worktree failed: {}", stderr.trim()));
             }
         }
-        log::info!("[auto-mode] Epic worktree ready: {}", worktree_dir);
+        log::info!("[auto-mode] Scoped worktree ready: {}", worktree_dir);
     }
 
     // 2. Symlink .beads/ from main repo so worktree shares issue state
@@ -3772,19 +3868,19 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         }
     }
 
-    // 3. Check if cmux workspace already exists for this epic
-    let workspace_name = format!("epic:{}", epic_id);
+    // 3. Check if cmux workspace already exists for this scope.
+    let workspace_name = scope.workspace_name.clone();
     let mut workspace_ref: Option<String> = None;
     let list_output = run_cmux(&["list-workspaces".to_string()]);
     if let Ok(ref output) = list_output {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Some(existing_ref) = stdout.lines()
-                .find(|line| line.contains(epic_id))
+                .find(|line| line.contains(&workspace_name) || line.contains(issue_id))
                 .and_then(|line| line.split_whitespace().find(|w| w.starts_with("workspace:")))
             {
                 let existing_ref = existing_ref.to_string();
-                log::info!("[auto-mode] Epic workspace already exists: {}", existing_ref);
+                log::info!("[auto-mode] Scoped workspace already exists: {}", existing_ref);
                 let _ = run_cmux(&[
                     "select-workspace".to_string(),
                     "--workspace".to_string(), existing_ref.clone(),
@@ -3794,7 +3890,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         }
     }
 
-    // 4. Create cmux workspace for epic
+    // 4. Create cmux workspace for this dispatch scope.
     let workspace_ref = match workspace_ref {
         Some(existing_ref) => existing_ref,
         None => {
@@ -3818,8 +3914,8 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         }
     };
 
-    // 5. Send Claude executor command for the selected task.
-    let orchestrator_command = build_auto_mode_orchestrator_command(epic_id, issue_id, &request.issue_title);
+    // 5. Send Claude command for the selected dispatch scope.
+    let orchestrator_command = build_auto_mode_agent_command(epic_id, issue_id, &request.issue_title, &workspace_ref);
     let cmux_send_args = vec![
         "send".to_string(),
         "--workspace".to_string(), workspace_ref.clone(),
@@ -3831,6 +3927,10 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         Ok(o) if o.status.success() => log::info!("[auto-mode] cmux send succeeded"),
         Ok(o) => return Err(format!("cmux send failed: {}", String::from_utf8_lossy(&o.stderr).trim())),
         Err(e) => return Err(format!("cmux send error: {}", e)),
+    }
+
+    if !scope.is_epic {
+        mark_auto_mode_issue_dispatched(project_path, issue_id, &workspace_ref)?;
     }
 
     let surface = workspace_ref;
@@ -7969,18 +8069,86 @@ prunable gitdir file points to non-existent location
 
     #[test]
     fn auto_mode_orchestrator_command_launches_claude_for_selected_task() {
-        let command = build_auto_mode_orchestrator_command(
+        let command = build_auto_mode_agent_command(
             "borabr-unf",
             "borabr-unf.7",
             "auto-mode trigger: poll br ready when enabled, dispatch to cmux+claude",
+            "workspace:42",
         );
 
         assert!(command.starts_with("claude "));
         assert!(command.contains("Beads task borabr-unf.7"));
         assert!(command.contains("epic borabr-unf"));
         assert!(command.contains("br show borabr-unf.7"));
-        assert!(command.contains("br update borabr-unf.7 --status in_progress --claim --json"));
+        assert!(command.contains("cmux:workspace:42"));
+        assert!(command.contains("br update borabr-unf.7 --status in_progress --assignee cmux:workspace:42 --json"));
+        assert!(command.contains("branch `task-borabr-unf.7`"));
         assert!(!command.contains("br list --json"));
+    }
+
+    #[test]
+    fn auto_mode_orchestrator_command_loops_review_and_merge_for_epic_dispatch() {
+        let command = build_auto_mode_agent_command(
+            "borabr-unf",
+            "borabr-unf",
+            "CMUX Task Orchestration",
+            "workspace:41",
+        );
+
+        assert!(command.starts_with("claude "));
+        assert!(command.contains("orchestrator for Beads epic borabr-unf"));
+        assert!(command.contains("br ready --json"));
+        assert!(command.contains("(.issues? // .)[]"));
+        assert!(command.contains("highest-priority ready task"));
+        assert!(command.contains("parallel"));
+        assert!(command.contains("separate Claude executor"));
+        assert!(command.contains("executor-complete comment"));
+        assert!(command.contains("independent Claude reviewer"));
+        assert!(command.contains("tests/type-check/build"));
+        assert!(command.contains("approve/request-changes verdict"));
+        assert!(command.contains("merge the task branch into main"));
+        assert!(command.contains("abort the merge"));
+        assert!(command.contains("remove the task worktree"));
+        assert!(command.contains("delete the task branch when safe"));
+        assert!(command.contains("br sync --flush-only"));
+    }
+
+    #[test]
+    fn auto_mode_dispatch_scope_uses_task_names_for_child_work() {
+        let task_scope = auto_mode_dispatch_scope("borabr-unf", "borabr-unf.2");
+        assert_eq!(task_scope.branch, "task-borabr-unf.2");
+        assert_eq!(task_scope.worktree_name, "task-borabr-unf.2");
+        assert_eq!(task_scope.workspace_name, "task:borabr-unf.2");
+        assert!(!task_scope.is_epic);
+
+        let epic_scope = auto_mode_dispatch_scope("borabr-unf", "borabr-unf");
+        assert_eq!(epic_scope.branch, "epic-borabr-unf");
+        assert_eq!(epic_scope.worktree_name, "borabr-unf");
+        assert_eq!(epic_scope.workspace_name, "epic:borabr-unf");
+        assert!(epic_scope.is_epic);
+    }
+
+    #[test]
+    fn cmux_send_prompt_targets_workspace_refs_as_workspaces() {
+        assert_eq!(
+            cmux_send_prompt_command("workspace:42", "hello"),
+            vec![
+                "send".to_string(),
+                "--workspace".to_string(),
+                "workspace:42".to_string(),
+                "hello\\n".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            cmux_send_prompt_command("surface:42", "hello"),
+            vec![
+                "send".to_string(),
+                "--surface".to_string(),
+                "surface:42".to_string(),
+                "hello\\n".to_string(),
+            ],
+        );
     }
 
     #[test]
