@@ -131,9 +131,13 @@ const worktreeBadgeClass: Record<ProjectWorktreeBadgeTone, string> = {
 }
 
 const toggleProjectWorktreeGroup = (path: string) => {
+  const wasExpanded = isProjectGroupExpanded(path)
   expandedProjectWorktreeGroups.value = {
     ...expandedProjectWorktreeGroups.value,
-    [path]: !isProjectGroupExpanded(path),
+    [path]: !wasExpanded,
+  }
+  if (!wasExpanded && !projectWorktrees.value[path]?.length) {
+    refreshProjectWorktreesForPath(path)
   }
 }
 
@@ -159,8 +163,11 @@ async function refreshProjectWorktreesForPath(path: string) {
 }
 
 async function refreshProjectWorktrees() {
+  // Only discover worktrees for expanded project groups to avoid GitHub API spam on startup
   for (const project of sortedProjects.value) {
-    await refreshProjectWorktreesForPath(project.path)
+    if (isProjectGroupExpanded(project.path) || project.path === beadsPath.value) {
+      await refreshProjectWorktreesForPath(project.path)
+    }
   }
 }
 

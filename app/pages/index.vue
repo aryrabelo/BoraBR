@@ -660,6 +660,9 @@ const refreshProjectIdleNotifications = async () => {
     const nextActionStates: Record<string, ProjectActionState> = {}
     const nextGitHubPullRequestStates: Record<string, ProjectGitHubPullRequestState> = {}
 
+    // GitHub PR calls deferred until after project loop to deduplicate by repo
+    const projectKeysForGitHub: Array<{ projectKey: string; projectPath: string; projectName: string }> = []
+
     for (const project of projects.value) {
       const projectKey = normalizeProjectPath(project.path)
 
@@ -691,14 +694,28 @@ const refreshProjectIdleNotifications = async () => {
           }
         }
 
-        const githubPullRequestResponse = await listProjectGitHubPullRequests(project.path)
-        nextGitHubPullRequestStates[projectKey] = buildActionCenterGitHubPullRequestState({
-          projectPath: project.path,
-          projectName: project.name,
-          response: githubPullRequestResponse,
-        })
+        projectKeysForGitHub.push({ projectKey, projectPath: project.path, projectName: project.name })
       } catch {
         // Ignore projects that cannot be read by br.
+      }
+    }
+
+    // Batch GitHub PR calls: fetch sequentially, cache by repoFullName to skip duplicates
+    const githubResponseByRepo = new Map<string, Awaited<ReturnType<typeof listProjectGitHubPullRequests>>>()
+    for (const { projectKey, projectPath, projectName } of projectKeysForGitHub) {
+      try {
+        const response = await listProjectGitHubPullRequests(projectPath)
+        const repoKey = response.repoFullName
+        if (repoKey && !githubResponseByRepo.has(repoKey)) {
+          githubResponseByRepo.set(repoKey, response)
+        }
+        nextGitHubPullRequestStates[projectKey] = buildActionCenterGitHubPullRequestState({
+          projectPath,
+          projectName,
+          response: repoKey ? githubResponseByRepo.get(repoKey)! : response,
+        })
+      } catch {
+        // Ignore GitHub errors
       }
     }
 
