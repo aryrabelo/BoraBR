@@ -3650,7 +3650,10 @@ pub struct AutoModeDispatchResponse {
 #[tauri::command]
 async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoModeDispatchResponse, String> {
     let issue_id = &request.issue_id;
-    let branch = format!("task-{}", issue_id);
+
+    // Derive epic ID: "borabr-unf.1" → "borabr-unf", epic itself stays as-is
+    let epic_id = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
+    let branch = format!("epic-{}", epic_id);
 
     // Resolve project root (follow worktree back to main repo)
     let project_path_raw = &request.project_path;
@@ -3667,27 +3670,23 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     };
     let project_path = &git_root;
 
-    // Derive epic dir from issue ID: "borabr-unf.1" → epic "borabr-unf"
-    let epic_dir = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
-    let worktrees_base = format!("{}/../worktrees/{}", project_path, epic_dir);
-    let worktree_dir = format!("{}/{}", worktrees_base, branch);
-
-    log::info!("[auto-mode] Dispatching {} to worktree {}", issue_id, worktree_dir);
-
-    // 1. Ensure git worktree exists (AI agent will claim the issue via /run-issue)
-    // Canonicalize parent to resolve .. in path
-    let worktrees_base_path = std::path::Path::new(&worktrees_base);
-    if !worktrees_base_path.exists() {
-        std::fs::create_dir_all(worktrees_base_path)
+    // Worktree path: worktrees/{epic-id} (one per epic, shared by all tasks)
+    let worktrees_parent = format!("{}/../worktrees", project_path);
+    let worktrees_parent_path = std::path::Path::new(&worktrees_parent);
+    if !worktrees_parent_path.exists() {
+        std::fs::create_dir_all(worktrees_parent_path)
             .map_err(|e| format!("Failed to create worktrees dir: {}", e))?;
     }
-    let canonical_base = worktrees_base_path.canonicalize()
-        .map_err(|e| format!("Failed to canonicalize worktrees base: {}", e))?;
-    let canonical_worktree = canonical_base.join(&branch);
+    let canonical_parent = worktrees_parent_path.canonicalize()
+        .map_err(|e| format!("Failed to canonicalize worktrees dir: {}", e))?;
+    let canonical_worktree = canonical_parent.join(epic_id);
     let mut worktree_dir = canonical_worktree.to_string_lossy().to_string();
 
+    log::info!("[auto-mode] Dispatching epic {} (task {}) to worktree {}", epic_id, issue_id, worktree_dir);
+
+    // 1. Ensure epic worktree exists (one branch per epic, reused across tasks)
     if canonical_worktree.exists() {
-        log::info!("[auto-mode] Worktree already exists, reusing: {}", worktree_dir);
+        log::info!("[auto-mode] Epic worktree already exists, reusing: {}", worktree_dir);
     } else {
         let worktree_output = new_command("git")
             .args(["worktree", "add", "-b", &branch, &worktree_dir, "HEAD"])
@@ -3698,13 +3697,10 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
         if !worktree_output.status.success() {
             let stderr = String::from_utf8_lossy(&worktree_output.stderr).to_string();
-
-            // Extract existing worktree path from error if available
             if let Some(existing) = extract_worktree_path_from_error(&stderr) {
                 log::info!("[auto-mode] Reusing existing worktree at {}", existing);
                 worktree_dir = existing;
             } else if stderr.contains("already exists") {
-                // Branch exists without worktree — attach to it
                 let retry = new_command("git")
                     .args(["worktree", "add", &worktree_dir, &branch])
                     .current_dir(project_path)
@@ -3714,7 +3710,6 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
                 if !retry.status.success() {
                     let retry_err = String::from_utf8_lossy(&retry.stderr).to_string();
                     if let Some(existing) = extract_worktree_path_from_error(&retry_err) {
-                        log::info!("[auto-mode] Reusing existing worktree at {}", existing);
                         worktree_dir = existing;
                     } else {
                         return Err(format!("git worktree failed: {}", retry_err.trim()));
@@ -3724,10 +3719,10 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
                 return Err(format!("git worktree failed: {}", stderr.trim()));
             }
         }
-        log::info!("[auto-mode] Worktree ready: {}", worktree_dir);
+        log::info!("[auto-mode] Epic worktree ready: {}", worktree_dir);
     }
 
-    // 2. Symlink .beads/ from main repo so all worktrees share issue state
+    // 2. Symlink .beads/ from main repo so worktree shares issue state
     let worktree_beads = std::path::Path::new(&worktree_dir).join(".beads");
     let main_beads = std::path::Path::new(project_path).join(".beads");
     if main_beads.exists() && !worktree_beads.exists() {
@@ -3737,10 +3732,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
                 .map_err(|e| format!("Failed to symlink .beads: {}", e))?;
             log::info!("[auto-mode] Symlinked .beads/ → {}", main_beads.display());
         }
-    } else if worktree_beads.is_symlink() {
-        log::info!("[auto-mode] .beads/ symlink already exists");
-    } else if worktree_beads.is_dir() {
-        // Replace existing .beads/ dir with symlink
+    } else if worktree_beads.is_dir() && !worktree_beads.is_symlink() {
         log::info!("[auto-mode] Replacing .beads/ dir with symlink to main repo");
         std::fs::remove_dir_all(&worktree_beads)
             .map_err(|e| format!("Failed to remove worktree .beads/: {}", e))?;
@@ -3751,20 +3743,18 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         }
     }
 
-    // 3. Check if cmux workspace already exists for this task
-    let workspace_name = format!("task:{}", issue_id);
+    // 3. Check if cmux workspace already exists for this epic
+    let workspace_name = format!("epic:{}", epic_id);
     let list_output = run_cmux(&["list-workspaces".to_string()]);
     if let Ok(ref output) = list_output {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.lines().any(|line| line.contains(issue_id)) {
-                // Workspace exists — focus it instead of creating new one
-                let existing_ref = stdout.lines()
-                    .find(|line| line.contains(issue_id))
-                    .and_then(|line| line.split_whitespace().find(|w| w.starts_with("workspace:")))
-                    .unwrap_or("workspace:0")
-                    .to_string();
-                log::info!("[auto-mode] Workspace already exists for {}: {}", issue_id, existing_ref);
+            if let Some(existing_ref) = stdout.lines()
+                .find(|line| line.contains(epic_id))
+                .and_then(|line| line.split_whitespace().find(|w| w.starts_with("workspace:")))
+            {
+                let existing_ref = existing_ref.to_string();
+                log::info!("[auto-mode] Epic workspace already exists: {}", existing_ref);
                 let _ = run_cmux(&[
                     "select-workspace".to_string(),
                     "--workspace".to_string(), existing_ref.clone(),
@@ -3778,50 +3768,41 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         }
     }
 
+    // 4. Create cmux workspace for epic
     let cmux_create_args = vec![
         "new-workspace".to_string(),
         "--name".to_string(), workspace_name,
         "--cwd".to_string(), worktree_dir.clone(),
     ];
-
     let cmux_output = run_cmux(&cmux_create_args)?;
     if !cmux_output.status.success() {
         let stderr = String::from_utf8_lossy(&cmux_output.stderr);
         return Err(format!("cmux new-workspace failed: {}", stderr.trim()));
     }
-
     let stdout = String::from_utf8_lossy(&cmux_output.stdout).trim().to_string();
-    log::info!("[auto-mode] cmux new-workspace output: {}", stdout);
+    log::info!("[auto-mode] cmux workspace created: {}", stdout);
 
-    // Parse workspace ref from output (e.g. "OK workspace:4")
     let workspace_ref = stdout.split_whitespace()
         .find(|s| s.starts_with("workspace:"))
         .unwrap_or("workspace:0")
         .to_string();
 
-    // 4. Send claude command to the new workspace
-    let claude_command = format!(
-        "claude 'Execute BR task {0}. Steps: 1) /br show {0} — read task details 2) Check if already implemented (search codebase, run tests) 3) If not done: implement it, run tests, commit 4) If already done: skip to step 5 5) /br close {0} with evidence of what was done or found'",
-        issue_id
+    // 5. Send codex orchestrator command — codex loops through epic tasks
+    let orchestrator_command = format!(
+        "codex 'You are an orchestrator for epic {0}. Loop: 1) Run: br list --json | jq \".[] | select(.id | test(\\\"{0}[.]\\\")) | select(.status==\\\"open\\\")\" to find open tasks 2) Pick highest priority task 3) Read task: br show <task-id> 4) Check if already implemented 5) If not done: implement, test, commit 6) Close: br close <task-id> --reason \"...\" 7) Repeat until no open tasks remain. Use agents for parallel work when possible.'",
+        epic_id
     );
     let cmux_send_args = vec![
         "send".to_string(),
         "--workspace".to_string(), workspace_ref.clone(),
-        format!("{}\\n", claude_command),
+        format!("{}\\n", orchestrator_command),
     ];
-    log::info!("[auto-mode] Sending to {}: cmux {}", workspace_ref, cmux_send_args.join(" "));
+    log::info!("[auto-mode] Sending orchestrator to {}", workspace_ref);
     let send_output = run_cmux(&cmux_send_args);
     match &send_output {
-        Ok(o) if o.status.success() => {
-            log::info!("[auto-mode] cmux send succeeded");
-        }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            log::warn!("[auto-mode] cmux send failed: {}", stderr.trim());
-        }
-        Err(e) => {
-            log::warn!("[auto-mode] cmux send error (non-fatal): {}", e);
-        }
+        Ok(o) if o.status.success() => log::info!("[auto-mode] cmux send succeeded"),
+        Ok(o) => log::warn!("[auto-mode] cmux send failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
+        Err(e) => log::warn!("[auto-mode] cmux send error (non-fatal): {}", e),
     }
 
     let surface = workspace_ref;

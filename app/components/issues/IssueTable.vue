@@ -655,7 +655,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                     <div class="flex items-start gap-2">
                       <span class="min-w-0 flex-1 text-xs font-medium line-clamp-2 break-words">{{ group.epic.title }}</span>
                       <AutoModeDispatchButton
-                        v-if="autoModeEnabled && group.epic.type !== 'epic'"
+                        v-if="autoModeEnabled"
                         :issue-id="group.epic.id"
                         :issue-status="group.epic.status"
                         :dispatching="autoModeDispatchingIds?.has(group.epic.id)"
