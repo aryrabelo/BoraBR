@@ -3658,16 +3658,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
     log::info!("[auto-mode] Dispatching {} to worktree {}", issue_id, worktree_dir);
 
-    // 1. Claim issue via br
-    let claim_args = vec![
-        "--actor".to_string(), "auto-mode".to_string(),
-        issue_id.to_string(),
-        "--status".to_string(), "in_progress".to_string(),
-        "--claim".to_string(),
-    ];
-    execute_bd("update", &claim_args, Some(project_path))?;
-
-    // 2. Create git worktree
+    // 1. Create git worktree (AI agent will claim the issue via /run-issue)
     let worktree_output = new_command("git")
         .args(["worktree", "add", "-b", &branch, &worktree_dir, "HEAD"])
         .current_dir(project_path)
