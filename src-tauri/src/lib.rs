@@ -3631,6 +3631,31 @@ fn extract_worktree_path_from_error(stderr: &str) -> Option<String> {
     }
 }
 
+fn build_auto_mode_orchestrator_command(epic_id: &str, issue_id: &str, issue_title: &str) -> String {
+    let prompt = format!(
+        "You are an executor for Beads task {issue_id} in epic {epic_id}. Task title: {issue_title}. First run `br show {issue_id}` and confirm the task is still open. Then claim it with `br update {issue_id} --status in_progress --claim --json`, implement only this task, run relevant tests, commit atomically, and close it with `br close {issue_id} --reason \"Implemented and verified\"`. Do not work unrelated tasks.",
+    );
+
+    format!("claude {}", shell_single_quote(&prompt))
+}
+
+fn has_in_progress_non_epic_issue(issues: &[BdRawIssue]) -> bool {
+    issues
+        .iter()
+        .any(|issue| issue.status == "in_progress" && issue.issue_type != "epic")
+}
+
+fn project_has_in_progress_auto_mode_task(project_path: &str) -> Result<bool, String> {
+    let output = execute_bd(
+        "list",
+        &["--all".to_string(), "--limit=0".to_string()],
+        Some(project_path),
+    )?;
+    let issues = parse_issues_tolerant(&output, "auto_mode_dispatch_in_progress")?;
+
+    Ok(has_in_progress_non_epic_issue(&issues))
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoModeDispatchRequest {
@@ -3669,6 +3694,10 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         project_path_raw.clone()
     };
     let project_path = &git_root;
+
+    if project_has_in_progress_auto_mode_task(project_path)? {
+        return Err("auto-mode dispatch blocked: project already has in-progress work".to_string());
+    }
 
     // Worktree path: worktrees/{epic-id} (one per epic, shared by all tasks)
     let worktrees_parent = format!("{}/../worktrees", project_path);
@@ -3745,6 +3774,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
     // 3. Check if cmux workspace already exists for this epic
     let workspace_name = format!("epic:{}", epic_id);
+    let mut workspace_ref: Option<String> = None;
     let list_output = run_cmux(&["list-workspaces".to_string()]);
     if let Ok(ref output) = list_output {
         if output.status.success() {
@@ -3759,39 +3789,37 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
                     "select-workspace".to_string(),
                     "--workspace".to_string(), existing_ref.clone(),
                 ]);
-                return Ok(AutoModeDispatchResponse {
-                    surface: existing_ref,
-                    worktree_path: worktree_dir,
-                    branch,
-                });
+                workspace_ref = Some(existing_ref);
             }
         }
     }
 
     // 4. Create cmux workspace for epic
-    let cmux_create_args = vec![
-        "new-workspace".to_string(),
-        "--name".to_string(), workspace_name,
-        "--cwd".to_string(), worktree_dir.clone(),
-    ];
-    let cmux_output = run_cmux(&cmux_create_args)?;
-    if !cmux_output.status.success() {
-        let stderr = String::from_utf8_lossy(&cmux_output.stderr);
-        return Err(format!("cmux new-workspace failed: {}", stderr.trim()));
-    }
-    let stdout = String::from_utf8_lossy(&cmux_output.stdout).trim().to_string();
-    log::info!("[auto-mode] cmux workspace created: {}", stdout);
+    let workspace_ref = match workspace_ref {
+        Some(existing_ref) => existing_ref,
+        None => {
+            let cmux_create_args = vec![
+                "new-workspace".to_string(),
+                "--name".to_string(), workspace_name,
+                "--cwd".to_string(), worktree_dir.clone(),
+            ];
+            let cmux_output = run_cmux(&cmux_create_args)?;
+            if !cmux_output.status.success() {
+                let stderr = String::from_utf8_lossy(&cmux_output.stderr);
+                return Err(format!("cmux new-workspace failed: {}", stderr.trim()));
+            }
+            let stdout = String::from_utf8_lossy(&cmux_output.stdout).trim().to_string();
+            log::info!("[auto-mode] cmux workspace created: {}", stdout);
 
-    let workspace_ref = stdout.split_whitespace()
-        .find(|s| s.starts_with("workspace:"))
-        .unwrap_or("workspace:0")
-        .to_string();
+            stdout.split_whitespace()
+                .find(|s| s.starts_with("workspace:"))
+                .unwrap_or("workspace:0")
+                .to_string()
+        }
+    };
 
-    // 5. Send codex orchestrator command — codex loops through epic tasks
-    let orchestrator_command = format!(
-        "codex 'You are an orchestrator for epic {0}. Loop: 1) Run: br list --json | jq \".[] | select(.id | test(\\\"{0}[.]\\\")) | select(.status==\\\"open\\\")\" to find open tasks 2) Pick highest priority task 3) Read task: br show <task-id> 4) Check if already implemented 5) If not done: implement, test, commit 6) Close: br close <task-id> --reason \"...\" 7) Repeat until no open tasks remain. Use agents for parallel work when possible.'",
-        epic_id
-    );
+    // 5. Send Claude executor command for the selected task.
+    let orchestrator_command = build_auto_mode_orchestrator_command(epic_id, issue_id, &request.issue_title);
     let cmux_send_args = vec![
         "send".to_string(),
         "--workspace".to_string(), workspace_ref.clone(),
@@ -3801,8 +3829,8 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     let send_output = run_cmux(&cmux_send_args);
     match &send_output {
         Ok(o) if o.status.success() => log::info!("[auto-mode] cmux send succeeded"),
-        Ok(o) => log::warn!("[auto-mode] cmux send failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
-        Err(e) => log::warn!("[auto-mode] cmux send error (non-fatal): {}", e),
+        Ok(o) => return Err(format!("cmux send failed: {}", String::from_utf8_lossy(&o.stderr).trim())),
+        Err(e) => return Err(format!("cmux send error: {}", e)),
     }
 
     let surface = workspace_ref;
@@ -7937,5 +7965,65 @@ prunable gitdir file points to non-existent location
         let issues = result.unwrap();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].id, "abc-123");
+    }
+
+    #[test]
+    fn auto_mode_orchestrator_command_launches_claude_for_selected_task() {
+        let command = build_auto_mode_orchestrator_command(
+            "borabr-unf",
+            "borabr-unf.7",
+            "auto-mode trigger: poll br ready when enabled, dispatch to cmux+claude",
+        );
+
+        assert!(command.starts_with("claude "));
+        assert!(command.contains("Beads task borabr-unf.7"));
+        assert!(command.contains("epic borabr-unf"));
+        assert!(command.contains("br show borabr-unf.7"));
+        assert!(command.contains("br update borabr-unf.7 --status in_progress --claim --json"));
+        assert!(!command.contains("br list --json"));
+    }
+
+    #[test]
+    fn auto_mode_in_progress_guard_ignores_epics() {
+        let epic = BdRawIssue {
+            id: "borabr-unf".to_string(),
+            title: "Epic".to_string(),
+            description: None,
+            status: "in_progress".to_string(),
+            priority: 0,
+            issue_type: "epic".to_string(),
+            owner: None,
+            assignee: None,
+            labels: None,
+            created_at: "2026-05-01T12:00:00Z".to_string(),
+            created_by: None,
+            updated_at: "2026-05-01T12:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            blocked_by: None,
+            blocks: None,
+            comments: None,
+            external_ref: None,
+            estimate: None,
+            design: None,
+            acceptance_criteria: None,
+            notes: None,
+            parent: None,
+            dependents: None,
+            dependencies: None,
+            dependency_count: None,
+            dependent_count: None,
+            metadata: None,
+            spec_id: None,
+            comment_count: None,
+        };
+        let task = BdRawIssue {
+            id: "borabr-unf.1".to_string(),
+            issue_type: "task".to_string(),
+            ..epic.clone()
+        };
+
+        assert!(!has_in_progress_non_epic_issue(&[epic]));
+        assert!(has_in_progress_non_epic_issue(&[task]));
     }
 }
