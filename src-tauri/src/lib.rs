@@ -3617,6 +3617,20 @@ async fn cmux_focus_surface(request: CmuxFocusSurfaceRequest) -> Result<CmuxFocu
     }
 }
 
+fn extract_worktree_path_from_error(stderr: &str) -> Option<String> {
+    // Parse: "already used by worktree at '/path/to/worktree'"
+    let marker = "at '";
+    let start = stderr.find(marker)?;
+    let rest = &stderr[start + marker.len()..];
+    let end = rest.find('\'')?;
+    let path = rest[..end].trim();
+    if !path.is_empty() && std::path::Path::new(path).exists() {
+        Some(path.to_string())
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoModeDispatchRequest {
@@ -3658,12 +3672,21 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
     log::info!("[auto-mode] Dispatching {} to worktree {}", issue_id, worktree_dir);
 
-    // 1. Create git worktree (AI agent will claim the issue via /run-issue)
-    let worktree_path = std::path::Path::new(&worktree_dir);
-    if worktree_path.exists() {
+    // 1. Ensure git worktree exists (AI agent will claim the issue via /run-issue)
+    // Canonicalize parent to resolve .. in path
+    let worktrees_base_path = std::path::Path::new(&worktrees_base);
+    if !worktrees_base_path.exists() {
+        std::fs::create_dir_all(worktrees_base_path)
+            .map_err(|e| format!("Failed to create worktrees dir: {}", e))?;
+    }
+    let canonical_base = worktrees_base_path.canonicalize()
+        .map_err(|e| format!("Failed to canonicalize worktrees base: {}", e))?;
+    let canonical_worktree = canonical_base.join(&branch);
+    let mut worktree_dir = canonical_worktree.to_string_lossy().to_string();
+
+    if canonical_worktree.exists() {
         log::info!("[auto-mode] Worktree already exists, reusing: {}", worktree_dir);
     } else {
-        // Try with new branch first, fall back to existing branch
         let worktree_output = new_command("git")
             .args(["worktree", "add", "-b", &branch, &worktree_dir, "HEAD"])
             .current_dir(project_path)
@@ -3673,9 +3696,13 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
         if !worktree_output.status.success() {
             let stderr = String::from_utf8_lossy(&worktree_output.stderr).to_string();
-            if stderr.contains("already exists") {
-                // Branch exists but worktree dir doesn't — use existing branch
-                log::info!("[auto-mode] Branch {} exists, creating worktree without -b", branch);
+
+            // Extract existing worktree path from error if available
+            if let Some(existing) = extract_worktree_path_from_error(&stderr) {
+                log::info!("[auto-mode] Reusing existing worktree at {}", existing);
+                worktree_dir = existing;
+            } else if stderr.contains("already exists") {
+                // Branch exists without worktree — attach to it
                 let retry = new_command("git")
                     .args(["worktree", "add", &worktree_dir, &branch])
                     .current_dir(project_path)
@@ -3683,14 +3710,19 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
                     .output()
                     .map_err(|e| format!("Failed to create worktree (retry): {}", e))?;
                 if !retry.status.success() {
-                    let retry_err = String::from_utf8_lossy(&retry.stderr);
-                    return Err(format!("git worktree failed: {}", retry_err.trim()));
+                    let retry_err = String::from_utf8_lossy(&retry.stderr).to_string();
+                    if let Some(existing) = extract_worktree_path_from_error(&retry_err) {
+                        log::info!("[auto-mode] Reusing existing worktree at {}", existing);
+                        worktree_dir = existing;
+                    } else {
+                        return Err(format!("git worktree failed: {}", retry_err.trim()));
+                    }
                 }
             } else {
                 return Err(format!("git worktree failed: {}", stderr.trim()));
             }
         }
-        log::info!("[auto-mode] Worktree created: {}", worktree_dir);
+        log::info!("[auto-mode] Worktree ready: {}", worktree_dir);
     }
 
     // 3. Open cmux workspace
