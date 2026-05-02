@@ -3776,13 +3776,13 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
     // 4. Send claude command to the new workspace
     let claude_command = format!(
-        "claude 'Execute BR task {0}. Steps: 1) /br show {0} to read the task details 2) Implement what the task describes 3) Run tests 4) Commit the changes 5) /br close {0} only after implementation is complete and verified'",
+        "claude 'Execute BR task {0}. Steps: 1) /br show {0} — read task details 2) Check if already implemented (search codebase, run tests) 3) If not done: implement it, run tests, commit 4) If already done: skip to step 5 5) /br close {0} with evidence of what was done or found'",
         issue_id
     );
     let cmux_send_args = vec![
         "send".to_string(),
         "--workspace".to_string(), workspace_ref.clone(),
-        claude_command,
+        format!("{}\\n", claude_command),
     ];
     log::info!("[auto-mode] Sending to {}: cmux {}", workspace_ref, cmux_send_args.join(" "));
     let send_output = run_cmux(&cmux_send_args);
