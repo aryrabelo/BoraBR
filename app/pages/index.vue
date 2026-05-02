@@ -12,7 +12,6 @@ import PathSelector from '~/components/dashboard/PathSelector.vue'
 import FolderPicker from '~/components/dashboard/FolderPicker.vue'
 import KpiCard from '~/components/dashboard/KpiCard.vue'
 import DashboardContent from '~/components/dashboard/DashboardContent.vue'
-import AutoModeToggle from '~/components/dashboard/AutoModeToggle.vue'
 import OnboardingCard from '~/components/dashboard/OnboardingCard.vue'
 import PrerequisitesCard from '~/components/dashboard/PrerequisitesCard.vue'
 
@@ -1471,10 +1470,7 @@ watch(
         <div v-if="isLeftSidebarOpen" class="flex-1 flex flex-col overflow-hidden">
           <!-- Top section (fixed content) -->
           <div class="p-4 space-y-4 shrink-0">
-            <div class="flex items-center gap-2">
-              <PathSelector v-if="!showOnboarding" ref="pathSelectorRef" class="flex-1" :is-loading="isLoading" @change="handlePathChange" @reset="handleReset" />
-              <AutoModeToggle v-if="!showOnboarding" />
-            </div>
+            <PathSelector v-if="!showOnboarding" ref="pathSelectorRef" :is-loading="isLoading" @change="handlePathChange" @reset="handleReset" />
             <Button
               variant="outline"
               class="w-full h-12 justify-between border-primary/30 bg-primary/5"

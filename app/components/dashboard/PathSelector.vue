@@ -7,6 +7,7 @@ import {
   TooltipTrigger,
 } from '~/components/ui/tooltip'
 import ConfirmDialog from '~/components/ui/confirm-dialog/ConfirmDialog.vue'
+import AutoModeToggle from '~/components/dashboard/AutoModeToggle.vue'
 import FolderPicker from './FolderPicker.vue'
 import Sortable from 'sortablejs'
 import { getFolderName } from '~/utils/path'
@@ -387,7 +388,7 @@ watch(
         </svg>
         Select Project
       </Button>
-
+      <AutoModeToggle />
     </div>
 
     <!-- Projects -->
