@@ -3659,19 +3659,39 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     log::info!("[auto-mode] Dispatching {} to worktree {}", issue_id, worktree_dir);
 
     // 1. Create git worktree (AI agent will claim the issue via /run-issue)
-    let worktree_output = new_command("git")
-        .args(["worktree", "add", "-b", &branch, &worktree_dir, "HEAD"])
-        .current_dir(project_path)
-        .env("PATH", get_extended_path())
-        .output()
-        .map_err(|e| format!("Failed to create worktree: {}", e))?;
+    let worktree_path = std::path::Path::new(&worktree_dir);
+    if worktree_path.exists() {
+        log::info!("[auto-mode] Worktree already exists, reusing: {}", worktree_dir);
+    } else {
+        // Try with new branch first, fall back to existing branch
+        let worktree_output = new_command("git")
+            .args(["worktree", "add", "-b", &branch, &worktree_dir, "HEAD"])
+            .current_dir(project_path)
+            .env("PATH", get_extended_path())
+            .output()
+            .map_err(|e| format!("Failed to create worktree: {}", e))?;
 
-    if !worktree_output.status.success() {
-        let stderr = String::from_utf8_lossy(&worktree_output.stderr);
-        return Err(format!("git worktree failed: {}", stderr.trim()));
+        if !worktree_output.status.success() {
+            let stderr = String::from_utf8_lossy(&worktree_output.stderr).to_string();
+            if stderr.contains("already exists") {
+                // Branch exists but worktree dir doesn't — use existing branch
+                log::info!("[auto-mode] Branch {} exists, creating worktree without -b", branch);
+                let retry = new_command("git")
+                    .args(["worktree", "add", &worktree_dir, &branch])
+                    .current_dir(project_path)
+                    .env("PATH", get_extended_path())
+                    .output()
+                    .map_err(|e| format!("Failed to create worktree (retry): {}", e))?;
+                if !retry.status.success() {
+                    let retry_err = String::from_utf8_lossy(&retry.stderr);
+                    return Err(format!("git worktree failed: {}", retry_err.trim()));
+                }
+            } else {
+                return Err(format!("git worktree failed: {}", stderr.trim()));
+            }
+        }
+        log::info!("[auto-mode] Worktree created: {}", worktree_dir);
     }
-
-    log::info!("[auto-mode] Worktree created: {}", worktree_dir);
 
     // 3. Open cmux workspace
     let workspace_name = format!("task:{}", issue_id);
