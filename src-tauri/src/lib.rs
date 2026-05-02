@@ -3707,6 +3707,22 @@ fn build_auto_mode_epic_orchestrator_command(epic_id: &str) -> String {
     format!("claude {}", shell_single_quote(&prompt))
 }
 
+fn build_auto_mode_reviewer_command(
+    epic_id: &str,
+    issue_id: &str,
+    issue_title: &str,
+    task_branch: &str,
+    executor_commit: &str,
+    cmux_ref: &str,
+) -> String {
+    let assignee = format!("cmux:{}", cmux_ref);
+    let prompt = format!(
+        "You are an independent reviewer for Beads task {issue_id} in epic {epic_id}. Task title: {issue_title}. You have fresh context — no bias from the executor. Branch: `{task_branch}`, executor commit: {executor_commit}. Steps: 1) Run `br show {issue_id}` to understand requirements. 2) Run `git log --oneline master..{task_branch}` and `git diff master...{task_branch}` to see all changes. 3) Run quality gates: `pnpm test` and `npx vue-tsc --noEmit`. 4) Review the diff against the task requirements — check correctness, test coverage, no unrelated changes, no security issues. 5) Add a structured BR comment with your verdict: `br comment {issue_id} 'REVIEW_VERDICT: APPROVED|CHANGES_REQUESTED\\nSummary: ...\\nFindings: ...'`. Use assignee {assignee}. If tests or type-check fail, verdict must be CHANGES_REQUESTED with failure details. Do not modify code — only validate and report.",
+    );
+
+    format!("claude {}", shell_single_quote(&prompt))
+}
+
 fn build_auto_mode_agent_command(
     epic_id: &str,
     issue_id: &str,
@@ -3909,7 +3925,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
             stdout.split_whitespace()
                 .find(|s| s.starts_with("workspace:"))
-                .unwrap_or("workspace:0")
+                .ok_or_else(|| format!("cmux new-workspace returned no workspace ref: {}", stdout))?
                 .to_string()
         }
     };
@@ -3939,6 +3955,238 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         surface,
         worktree_path: worktree_dir,
         branch,
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeDispatchReviewRequest {
+    pub project_path: String,
+    pub issue_id: String,
+    pub issue_title: String,
+    pub task_branch: String,
+    pub executor_commit: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeDispatchReviewResponse {
+    pub surface: String,
+    pub workspace_name: String,
+}
+
+#[tauri::command]
+async fn auto_mode_dispatch_review(request: AutoModeDispatchReviewRequest) -> Result<AutoModeDispatchReviewResponse, String> {
+    let issue_id = &request.issue_id;
+    let epic_id = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
+
+    let project_path_raw = &request.project_path;
+    let git_root_output = new_command("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_path_raw)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to find git root: {}", e))?;
+    let project_path = if git_root_output.status.success() {
+        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
+    } else {
+        project_path_raw.clone()
+    };
+
+    let scope = auto_mode_dispatch_scope(epic_id, issue_id);
+    let worktrees_parent = format!("{}/../worktrees", project_path);
+    let canonical_parent = std::path::Path::new(&worktrees_parent).canonicalize()
+        .map_err(|e| format!("Failed to canonicalize worktrees dir: {}", e))?;
+    let worktree_dir = canonical_parent.join(&scope.worktree_name);
+    if !worktree_dir.exists() {
+        return Err(format!("Task worktree does not exist: {}", worktree_dir.display()));
+    }
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+
+    let review_workspace_name = format!("review:{}", issue_id);
+    log::info!("[auto-mode] [review-gate] Dispatching reviewer for {} in {}", issue_id, worktree_dir_str);
+
+    // Check if review workspace already exists
+    let mut workspace_ref: Option<String> = None;
+    let list_output = run_cmux(&["list-workspaces".to_string()]);
+    if let Ok(ref output) = list_output {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(existing_ref) = stdout.lines()
+                .find(|line| line.contains(&review_workspace_name))
+                .and_then(|line| line.split_whitespace().find(|w| w.starts_with("workspace:")))
+            {
+                let existing_ref = existing_ref.to_string();
+                log::info!("[auto-mode] [review-gate] Reusing review workspace: {}", existing_ref);
+                workspace_ref = Some(existing_ref);
+            }
+        }
+    }
+
+    // Create review workspace if needed
+    let workspace_ref = match workspace_ref {
+        Some(existing) => existing,
+        None => {
+            let cmux_create_args = vec![
+                "new-workspace".to_string(),
+                "--name".to_string(), review_workspace_name.clone(),
+                "--cwd".to_string(), worktree_dir_str.clone(),
+            ];
+            let cmux_output = run_cmux(&cmux_create_args)?;
+            if !cmux_output.status.success() {
+                let stderr = String::from_utf8_lossy(&cmux_output.stderr);
+                return Err(format!("cmux new-workspace failed for review: {}", stderr.trim()));
+            }
+            let stdout = String::from_utf8_lossy(&cmux_output.stdout).trim().to_string();
+            log::info!("[auto-mode] [review-gate] Review workspace created: {}", stdout);
+
+            stdout.split_whitespace()
+                .find(|s| s.starts_with("workspace:"))
+                .ok_or_else(|| format!("cmux new-workspace (review) returned no workspace ref: {}", stdout))?
+                .to_string()
+        }
+    };
+
+    // Send reviewer command
+    let reviewer_command = build_auto_mode_reviewer_command(
+        epic_id,
+        issue_id,
+        &request.issue_title,
+        &request.task_branch,
+        &request.executor_commit,
+        &workspace_ref,
+    );
+    let cmux_send_args = vec![
+        "send".to_string(),
+        "--workspace".to_string(), workspace_ref.clone(),
+        format!("{}\\n", reviewer_command),
+    ];
+    log::info!("[auto-mode] [review-gate] Sending reviewer to {}", workspace_ref);
+    let send_output = run_cmux(&cmux_send_args);
+    match &send_output {
+        Ok(o) if o.status.success() => log::info!("[auto-mode] [review-gate] cmux send succeeded"),
+        Ok(o) => return Err(format!("cmux send failed for review: {}", String::from_utf8_lossy(&o.stderr).trim())),
+        Err(e) => return Err(format!("cmux send error for review: {}", e)),
+    }
+
+    Ok(AutoModeDispatchReviewResponse {
+        surface: workspace_ref,
+        workspace_name: review_workspace_name,
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeMergeApprovedRequest {
+    pub project_path: String,
+    pub issue_id: String,
+    pub task_branch: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeMergeApprovedResponse {
+    pub merged: bool,
+    pub closed: bool,
+    pub worktree_removed: bool,
+}
+
+#[tauri::command]
+async fn auto_mode_merge_approved(request: AutoModeMergeApprovedRequest) -> Result<AutoModeMergeApprovedResponse, String> {
+    let issue_id = &request.issue_id;
+    let task_branch = &request.task_branch;
+
+    let project_path_raw = &request.project_path;
+    let git_root_output = new_command("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_path_raw)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to find git root: {}", e))?;
+    let project_path = if git_root_output.status.success() {
+        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
+    } else {
+        project_path_raw.clone()
+    };
+
+    log::info!("[auto-mode] [merge] Merging approved branch {} for {}", task_branch, issue_id);
+
+    // 1. Merge task branch into current branch (main)
+    let merge_output = new_command("git")
+        .args(["merge", "--no-ff", task_branch, "-m", &format!("merge: {} from branch {}", issue_id, task_branch)])
+        .current_dir(&project_path)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("git merge failed to execute: {}", e))?;
+
+    if !merge_output.status.success() {
+        let stderr = String::from_utf8_lossy(&merge_output.stderr).to_string();
+        // Abort the merge if it conflicted
+        let _ = new_command("git")
+            .args(["merge", "--abort"])
+            .current_dir(&project_path)
+            .env("PATH", get_extended_path())
+            .output();
+        return Err(format!("Merge failed (aborted): {}", stderr.trim()));
+    }
+    log::info!("[auto-mode] [merge] Branch {} merged successfully", task_branch);
+
+    // 2. Close BR issue
+    let epic_id = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
+    let close_result = execute_bd(
+        "close",
+        &[issue_id.to_string(), "--reason".to_string(), format!("Merged {} into main", task_branch)],
+        Some(&project_path),
+    );
+    let closed = close_result.is_ok();
+    if closed {
+        log::info!("[auto-mode] [merge] Issue {} closed", issue_id);
+    } else {
+        log::warn!("[auto-mode] [merge] Failed to close {}: {:?}", issue_id, close_result.err());
+    }
+
+    // 3. Remove worktree
+    let scope = auto_mode_dispatch_scope(epic_id, issue_id);
+    let worktrees_parent = format!("{}/../worktrees", project_path);
+    let worktree_removed = if let Ok(canonical_parent) = std::path::Path::new(&worktrees_parent).canonicalize() {
+        let worktree_path = canonical_parent.join(&scope.worktree_name);
+        if worktree_path.exists() {
+            let remove_output = new_command("git")
+                .args(["worktree", "remove", &worktree_path.to_string_lossy()])
+                .current_dir(&project_path)
+                .env("PATH", get_extended_path())
+                .output();
+            match remove_output {
+                Ok(o) if o.status.success() => {
+                    log::info!("[auto-mode] [merge] Worktree {} removed", scope.worktree_name);
+                    true
+                }
+                _ => {
+                    log::warn!("[auto-mode] [merge] Failed to remove worktree {}", scope.worktree_name);
+                    false
+                }
+            }
+        } else {
+            true
+        }
+    } else {
+        false
+    };
+
+    // 4. Delete task branch (safe — already merged)
+    let _ = new_command("git")
+        .args(["branch", "-d", task_branch])
+        .current_dir(&project_path)
+        .env("PATH", get_extended_path())
+        .output();
+
+    // 5. Flush BR sync
+    let _ = execute_bd("sync", &["--flush-only".to_string()], Some(&project_path));
+
+    Ok(AutoModeMergeApprovedResponse {
+        merged: true,
+        closed,
+        worktree_removed,
     })
 }
 
@@ -7414,6 +7662,8 @@ pub fn run() {
             cmux_focus_surface,
             cmux_send_prompt,
             auto_mode_dispatch,
+            auto_mode_dispatch_review,
+            auto_mode_merge_approved,
             terminal_native_renderer_capabilities,
             terminal_open_native_renderer,
             terminal::terminal_create,
@@ -8193,5 +8443,48 @@ prunable gitdir file points to non-existent location
 
         assert!(!has_in_progress_non_epic_issue(&[epic]));
         assert!(has_in_progress_non_epic_issue(&[task]));
+    }
+
+    #[test]
+    fn reviewer_command_includes_task_context_and_quality_gates() {
+        let command = build_auto_mode_reviewer_command(
+            "borabr-unf",
+            "borabr-unf.4",
+            "review agent gate",
+            "task-borabr-unf.4",
+            "abc1234",
+            "workspace:50",
+        );
+
+        assert!(command.starts_with("claude "));
+        assert!(command.contains("independent reviewer"));
+        assert!(command.contains("Beads task borabr-unf.4"));
+        assert!(command.contains("epic borabr-unf"));
+        assert!(command.contains("fresh context"));
+        assert!(command.contains("no bias"));
+        assert!(command.contains("Branch: `task-borabr-unf.4`"));
+        assert!(command.contains("executor commit: abc1234"));
+        assert!(command.contains("br show borabr-unf.4"));
+        assert!(command.contains("git diff master...task-borabr-unf.4"));
+        assert!(command.contains("pnpm test"));
+        assert!(command.contains("vue-tsc --noEmit"));
+        assert!(command.contains("REVIEW_VERDICT"));
+        assert!(command.contains("APPROVED"));
+        assert!(command.contains("CHANGES_REQUESTED"));
+        assert!(command.contains("Do not modify code"));
+    }
+
+    #[test]
+    fn reviewer_command_uses_correct_assignee_format() {
+        let command = build_auto_mode_reviewer_command(
+            "epic-1",
+            "epic-1.3",
+            "some task",
+            "task-epic-1.3",
+            "def5678",
+            "workspace:99",
+        );
+
+        assert!(command.contains("cmux:workspace:99"));
     }
 }
