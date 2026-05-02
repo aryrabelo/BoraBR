@@ -1,0 +1,25 @@
+app/components/dashboard/PathSelector.vue
+  a36006640f208179 134,137-140,166,168-170
+app/pages/index.vue
+  a36006640f208179 663-665,697-711,713-715,718
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "21d92e8d5635bbb4504c23138d1f206751b8f074",
+  "prompts": {
+    "a36006640f208179": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "787d84ae-4240-4f90-a1de-5bc80ae91499",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 95,
+      "total_deletions": 55,
+      "accepted_lines": 1680,
+      "overriden_lines": 1
+    }
+  }
+}
