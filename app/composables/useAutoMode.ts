@@ -26,6 +26,19 @@ export interface AutoModeDispatchResponse {
   branch: string
 }
 
+export interface AutoModeDispatchReviewRequest {
+  projectPath: string
+  issueId: string
+  issueTitle: string
+  taskBranch: string
+  executorCommit: string
+}
+
+export interface AutoModeDispatchReviewResponse {
+  surface: string
+  workspaceName: string
+}
+
 export interface UseAutoModeOptions {
   refreshReady?: () => Promise<Issue[] | null | void>
   readyPollIntervalMs?: number
@@ -184,6 +197,35 @@ export function useAutoMode(
     }
   }
 
+  async function dispatchReview(issueId: string, executorCommit: string) {
+    const task = activeTaskMap.value.get(issueId)
+    if (!task || task.status !== 'running') return
+
+    task.status = 'reviewing'
+    activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
+
+    try {
+      logFrontend('info', `[auto-mode] Dispatching reviewer for ${issueId} (commit ${executorCommit})`)
+
+      const result = await invoke<AutoModeDispatchReviewResponse>('auto_mode_dispatch_review', {
+        request: {
+          projectPath: projectPath.value,
+          issueId,
+          issueTitle: task.title,
+          taskBranch: task.worktreeBranch ?? `task-${issueId}`,
+          executorCommit,
+        } satisfies AutoModeDispatchReviewRequest,
+      })
+
+      logFrontend('info', `[auto-mode] Reviewer running on ${result.surface} for ${issueId}`)
+    } catch (e) {
+      task.status = 'failed'
+      task.error = `Review dispatch failed: ${e}`
+      activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
+      logFrontend('error', `[auto-mode] Failed to dispatch reviewer for ${issueId}: ${e}`)
+    }
+  }
+
   function tryDispatch() {
     if (!canDispatch.value) return
 
@@ -228,5 +270,6 @@ export function useAutoMode(
     hasRunningTask,
     isDispatching,
     canDispatch,
+    dispatchReview,
   }
 }
