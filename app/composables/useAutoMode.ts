@@ -39,6 +39,18 @@ export interface AutoModeDispatchReviewResponse {
   workspaceName: string
 }
 
+export interface AutoModeMergeApprovedRequest {
+  projectPath: string
+  issueId: string
+  taskBranch: string
+}
+
+export interface AutoModeMergeApprovedResponse {
+  merged: boolean
+  closed: boolean
+  worktreeRemoved: boolean
+}
+
 export interface UseAutoModeOptions {
   refreshReady?: () => Promise<Issue[] | null | void>
   readyPollIntervalMs?: number
@@ -226,6 +238,35 @@ export function useAutoMode(
     }
   }
 
+  async function mergeApproved(issueId: string) {
+    const task = activeTaskMap.value.get(issueId)
+    if (!task || task.status !== 'reviewing') return
+
+    task.status = 'merging'
+    activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
+
+    try {
+      logFrontend('info', `[auto-mode] Merging approved task ${issueId}`)
+
+      const result = await invoke<AutoModeMergeApprovedResponse>('auto_mode_merge_approved', {
+        request: {
+          projectPath: projectPath.value,
+          issueId,
+          taskBranch: task.worktreeBranch ?? `task-${issueId}`,
+        } satisfies AutoModeMergeApprovedRequest,
+      })
+
+      task.status = 'done'
+      activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
+      logFrontend('info', `[auto-mode] Task ${issueId} merged=${result.merged} closed=${result.closed} worktree_removed=${result.worktreeRemoved}`)
+    } catch (e) {
+      task.status = 'failed'
+      task.error = `Merge failed: ${e}`
+      activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
+      logFrontend('error', `[auto-mode] Merge failed for ${issueId}: ${e}`)
+    }
+  }
+
   function tryDispatch() {
     if (!canDispatch.value) return
 
@@ -271,5 +312,6 @@ export function useAutoMode(
     isDispatching,
     canDispatch,
     dispatchReview,
+    mergeApproved,
   }
 }
