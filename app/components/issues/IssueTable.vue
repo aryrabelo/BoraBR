@@ -12,6 +12,7 @@ import {
 } from '~/components/ui/table'
 import TypeBadge from '~/components/issues/TypeBadge.vue'
 import StatusBadge from '~/components/issues/StatusBadge.vue'
+import { Badge } from '~/components/ui/badge'
 import ReviewStateBadge from '~/components/issues/ReviewStateBadge.vue'
 import PriorityBadge from '~/components/issues/PriorityBadge.vue'
 import LabelBadge from '~/components/issues/LabelBadge.vue'
@@ -674,7 +675,9 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
 
                   <template v-else-if="col.id === 'status'">
                     <div class="flex items-center gap-1">
-                      <StatusBadge :status="group.epic.status" size="sm" />
+                      <Badge v-if="autoModeRunningIds?.has(group.epic.id)" class="text-[10px] px-1.5 py-0 bg-cyan-600 text-white animate-pulse">DISPATCHED</Badge>
+                      <Badge v-else-if="autoModeDispatchingIds?.has(group.epic.id)" class="text-[10px] px-1.5 py-0 bg-yellow-600 text-white animate-pulse">LAUNCHING</Badge>
+                      <StatusBadge v-else :status="group.epic.status" size="sm" />
                       <ReviewStateBadge v-if="group.epic.status === 'in_review'" :issue="group.epic" />
                       <Tooltip v-if="group.epic.blockedBy?.length">
                         <TooltipTrigger as-child>
@@ -862,7 +865,9 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
 
                     <template v-else-if="col.id === 'status'">
                       <div class="flex items-center gap-1">
-                        <StatusBadge :status="child.status" size="sm" />
+                        <Badge v-if="autoModeRunningIds?.has(child.id)" class="text-[10px] px-1.5 py-0 bg-cyan-600 text-white animate-pulse">DISPATCHED</Badge>
+                        <Badge v-else-if="autoModeDispatchingIds?.has(child.id)" class="text-[10px] px-1.5 py-0 bg-yellow-600 text-white animate-pulse">LAUNCHING</Badge>
+                        <StatusBadge v-else :status="child.status" size="sm" />
                         <ReviewStateBadge v-if="child.status === 'in_review'" :issue="child" />
                         <Tooltip v-if="child.blockedBy?.length">
                           <TooltipTrigger as-child>
@@ -1022,7 +1027,9 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
 
                   <template v-else-if="col.id === 'status'">
                     <div class="flex items-center gap-1">
-                      <StatusBadge :status="issue.status" size="sm" />
+                      <Badge v-if="autoModeRunningIds?.has(issue.id)" class="text-[10px] px-1.5 py-0 bg-cyan-600 text-white animate-pulse">DISPATCHED</Badge>
+                      <Badge v-else-if="autoModeDispatchingIds?.has(issue.id)" class="text-[10px] px-1.5 py-0 bg-yellow-600 text-white animate-pulse">LAUNCHING</Badge>
+                      <StatusBadge v-else :status="issue.status" size="sm" />
                       <ReviewStateBadge v-if="issue.status === 'in_review'" :issue="issue" />
                       <Tooltip v-if="issue.blockedBy?.length">
                         <TooltipTrigger as-child>
@@ -1174,7 +1181,9 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
 
               <template v-else-if="col.id === 'status'">
                 <div class="flex items-center gap-1">
-                  <StatusBadge :status="issue.status" size="sm" />
+                  <Badge v-if="autoModeRunningIds?.has(issue.id)" class="text-[10px] px-1.5 py-0 bg-cyan-600 text-white animate-pulse">DISPATCHED</Badge>
+                  <Badge v-else-if="autoModeDispatchingIds?.has(issue.id)" class="text-[10px] px-1.5 py-0 bg-yellow-600 text-white animate-pulse">LAUNCHING</Badge>
+                  <StatusBadge v-else :status="issue.status" size="sm" />
                   <ReviewStateBadge v-if="issue.status === 'in_review'" :issue="issue" />
                   <Tooltip v-if="issue.blockedBy?.length">
                     <TooltipTrigger as-child>

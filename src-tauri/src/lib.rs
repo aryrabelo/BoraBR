@@ -3749,7 +3749,10 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         .to_string();
 
     // 4. Send claude command to the new workspace
-    let claude_command = format!("claude '/run-issue {}'", issue_id);
+    let claude_command = format!(
+        "claude '/run-issue {}'",
+        issue_id
+    );
     let cmux_send_args = vec![
         "send".to_string(),
         "--workspace".to_string(), workspace_ref.clone(),
