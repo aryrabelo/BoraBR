@@ -3750,7 +3750,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
     // 4. Send claude command to the new workspace
     let claude_command = format!(
-        "claude '/run-issue {}'",
+        "claude 'Execute BR task {0}. Steps: 1) /br show {0} to read the task details 2) Implement what the task describes 3) Run tests 4) Commit the changes 5) /br close {0} only after implementation is complete and verified'",
         issue_id
     );
     let cmux_send_args = vec![
