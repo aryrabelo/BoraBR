@@ -3635,10 +3635,26 @@ pub struct AutoModeDispatchResponse {
 
 #[tauri::command]
 async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoModeDispatchResponse, String> {
-    let project_path = &request.project_path;
     let issue_id = &request.issue_id;
     let branch = format!("task-{}", issue_id);
-    let worktree_dir = format!("{}/../worktrees/{}", project_path, branch);
+
+    // Resolve project root (follow worktree back to main repo)
+    let project_path_raw = &request.project_path;
+    let git_root_output = new_command("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_path_raw)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to find git root: {}", e))?;
+    let git_root = if git_root_output.status.success() {
+        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
+    } else {
+        project_path_raw.clone()
+    };
+    let project_path = &git_root;
+
+    let worktrees_base = format!("{}/../worktrees", project_path);
+    let worktree_dir = format!("{}/{}", worktrees_base, branch);
 
     log::info!("[auto-mode] Dispatching {} to worktree {}", issue_id, worktree_dir);
 
@@ -3681,25 +3697,37 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     }
 
     let stdout = String::from_utf8_lossy(&cmux_output.stdout).trim().to_string();
+    log::info!("[auto-mode] cmux new-workspace output: {}", stdout);
 
-    // 4. Send claude command to the new workspace's surface
+    // Parse workspace ref from output (e.g. "OK workspace:4")
+    let workspace_ref = stdout.split_whitespace()
+        .find(|s| s.starts_with("workspace:"))
+        .unwrap_or("workspace:0")
+        .to_string();
+
+    // 4. Send claude command to the new workspace
     let claude_command = format!("claude --prompt '/run-issue {}'", issue_id);
     let cmux_send_args = vec![
         "send".to_string(),
+        "--workspace".to_string(), workspace_ref.clone(),
         claude_command,
     ];
+    log::info!("[auto-mode] Sending to {}: cmux {}", workspace_ref, cmux_send_args.join(" "));
     let send_output = run_cmux(&cmux_send_args);
-    if let Err(ref e) = send_output {
-        log::warn!("[auto-mode] cmux send failed (non-fatal): {}", e);
+    match &send_output {
+        Ok(o) if o.status.success() => {
+            log::info!("[auto-mode] cmux send succeeded");
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            log::warn!("[auto-mode] cmux send failed: {}", stderr.trim());
+        }
+        Err(e) => {
+            log::warn!("[auto-mode] cmux send error (non-fatal): {}", e);
+        }
     }
-    log::info!("[auto-mode] cmux workspace created: {}", stdout);
 
-    // Parse surface from cmux output
-    let surface = stdout.lines()
-        .find(|l| l.contains("surface"))
-        .and_then(|l| l.split_whitespace().last())
-        .unwrap_or(&stdout)
-        .to_string();
+    let surface = workspace_ref;
 
     Ok(AutoModeDispatchResponse {
         surface,
