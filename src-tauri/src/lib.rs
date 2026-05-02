@@ -3666,23 +3666,32 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
     log::info!("[auto-mode] Worktree created: {}", worktree_dir);
 
-    // 3. Open cmux workspace with claude agent
+    // 3. Open cmux workspace
     let workspace_name = format!("task:{}", issue_id);
-    let claude_prompt = format!("/run-issue {}", issue_id);
-    let cmux_args = vec![
+    let cmux_create_args = vec![
         "new-workspace".to_string(),
         "--name".to_string(), workspace_name,
         "--cwd".to_string(), worktree_dir.clone(),
-        "--command".to_string(), format!("claude --prompt '{}'", claude_prompt),
     ];
 
-    let cmux_output = run_cmux(&cmux_args)?;
+    let cmux_output = run_cmux(&cmux_create_args)?;
     if !cmux_output.status.success() {
         let stderr = String::from_utf8_lossy(&cmux_output.stderr);
         return Err(format!("cmux new-workspace failed: {}", stderr.trim()));
     }
 
     let stdout = String::from_utf8_lossy(&cmux_output.stdout).trim().to_string();
+
+    // 4. Send claude command to the new workspace's surface
+    let claude_command = format!("claude --prompt '/run-issue {}'", issue_id);
+    let cmux_send_args = vec![
+        "send".to_string(),
+        claude_command,
+    ];
+    let send_output = run_cmux(&cmux_send_args);
+    if let Err(ref e) = send_output {
+        log::warn!("[auto-mode] cmux send failed (non-fatal): {}", e);
+    }
     log::info!("[auto-mode] cmux workspace created: {}", stdout);
 
     // Parse surface from cmux output
