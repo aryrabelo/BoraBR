@@ -812,6 +812,7 @@ fn validate_cmux_prompt(prompt: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn should_fallback_cmux_focus(stderr: &str) -> bool {
     stderr.contains("Unknown command") || stderr.contains("focus-surface")
 }
@@ -3504,14 +3505,10 @@ async fn cmux_focus_surface(request: CmuxFocusSurfaceRequest) -> Result<CmuxFocu
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            log::warn!("[cmux] [task-terminal] primary command failed: {} stderr={} ", focus_args.join(" "), stderr.trim());
-            if !should_fallback_cmux_focus(&stderr) {
-                return Err(format!("cmux {} failed: {}", focus_args.join(" "), stderr.trim()));
-            }
+            log::warn!("[cmux] [task-terminal] primary command failed: {} stderr={}", focus_args.join(" "), stderr.trim());
         }
         Err(error) => {
-            log::warn!("[cmux] [task-terminal] primary command execution error: {}", error);
-            return Err(error);
+            log::warn!("[cmux] [task-terminal] primary command not available, trying fallbacks: {}", error);
         }
     }
 
@@ -3618,6 +3615,89 @@ async fn cmux_focus_surface(request: CmuxFocusSurfaceRequest) -> Result<CmuxFocu
             Err(error)
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeDispatchRequest {
+    pub project_path: String,
+    pub issue_id: String,
+    pub issue_title: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeDispatchResponse {
+    pub surface: String,
+    pub worktree_path: String,
+    pub branch: String,
+}
+
+#[tauri::command]
+async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoModeDispatchResponse, String> {
+    let project_path = &request.project_path;
+    let issue_id = &request.issue_id;
+    let branch = format!("task-{}", issue_id);
+    let worktree_dir = format!("{}/../worktrees/{}", project_path, branch);
+
+    log::info!("[auto-mode] Dispatching {} to worktree {}", issue_id, worktree_dir);
+
+    // 1. Claim issue via br
+    let claim_args = vec![
+        "update".to_string(),
+        "--actor".to_string(), "auto-mode".to_string(),
+        issue_id.to_string(),
+        "--status".to_string(), "in_progress".to_string(),
+        "--claim".to_string(),
+    ];
+    execute_bd("update", &claim_args[2..].to_vec(), Some(project_path))?;
+
+    // 2. Create git worktree
+    let worktree_output = new_command("git")
+        .args(["worktree", "add", "-b", &branch, &worktree_dir, "HEAD"])
+        .current_dir(project_path)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to create worktree: {}", e))?;
+
+    if !worktree_output.status.success() {
+        let stderr = String::from_utf8_lossy(&worktree_output.stderr);
+        return Err(format!("git worktree failed: {}", stderr.trim()));
+    }
+
+    log::info!("[auto-mode] Worktree created: {}", worktree_dir);
+
+    // 3. Open cmux workspace with claude agent
+    let workspace_name = format!("task:{}", issue_id);
+    let claude_prompt = format!("/run-issue {}", issue_id);
+    let cmux_args = vec![
+        "new-workspace".to_string(),
+        "--name".to_string(), workspace_name,
+        "--cwd".to_string(), worktree_dir.clone(),
+        "--command".to_string(), format!("claude --prompt '{}'", claude_prompt),
+    ];
+
+    let cmux_output = run_cmux(&cmux_args)?;
+    if !cmux_output.status.success() {
+        let stderr = String::from_utf8_lossy(&cmux_output.stderr);
+        return Err(format!("cmux new-workspace failed: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&cmux_output.stdout).trim().to_string();
+    log::info!("[auto-mode] cmux workspace created: {}", stdout);
+
+    // Parse surface from cmux output
+    let surface = stdout.lines()
+        .find(|l| l.contains("surface"))
+        .and_then(|l| l.split_whitespace().last())
+        .unwrap_or(&stdout)
+        .to_string();
+
+    Ok(AutoModeDispatchResponse {
+        surface,
+        worktree_path: worktree_dir,
+        branch,
+    })
 }
 
 #[tauri::command]
@@ -7091,6 +7171,7 @@ pub fn run() {
             agent_process_status,
             cmux_focus_surface,
             cmux_send_prompt,
+            auto_mode_dispatch,
             terminal_native_renderer_capabilities,
             terminal_open_native_renderer,
             terminal::terminal_create,

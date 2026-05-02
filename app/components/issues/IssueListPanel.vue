@@ -29,6 +29,9 @@ defineProps<{
   terminalProjectPath?: string
   terminalProjectName?: string
   taskTerminalsEnabled?: boolean
+  autoModeEnabled?: boolean
+  autoModeDispatchingIds?: Set<string>
+  autoModeRunningIds?: Set<string>
 }>()
 
 const emit = defineEmits<{
@@ -50,6 +53,8 @@ const emit = defineEmits<{
   'load-more': []
   sort: [field: string | null, direction: 'asc' | 'desc']
   'toggle-pin': [issueId: string]
+  'auto-dispatch': [issue: Issue]
+  'auto-pause': [issue: Issue]
 }>()
 
 const handleSort = (field: string | null, direction: 'asc' | 'desc') => {
@@ -117,12 +122,17 @@ const handleSort = (field: string | null, direction: 'asc' | 'desc') => {
       :terminal-project-path="terminalProjectPath"
       :terminal-project-name="terminalProjectName"
       :task-terminals-enabled="taskTerminalsEnabled"
+      :auto-mode-enabled="autoModeEnabled"
+      :auto-mode-dispatching-ids="autoModeDispatchingIds"
+      :auto-mode-running-ids="autoModeRunningIds"
       @select="emit('select', $event)"
       @edit="emit('edit', $event)"
       @deselect="emit('deselect')"
       @load-more="emit('load-more')"
       @sort="handleSort"
       @toggle-pin="emit('toggle-pin', $event)"
+      @auto-dispatch="emit('auto-dispatch', $event)"
+      @auto-pause="emit('auto-pause', $event)"
     />
   </div>
 </template>

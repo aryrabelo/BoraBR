@@ -17,6 +17,7 @@ import PriorityBadge from '~/components/issues/PriorityBadge.vue'
 import LabelBadge from '~/components/issues/LabelBadge.vue'
 import TerminalPanel from '~/components/terminal/TerminalPanel.vue'
 import IssueTerminalToggle from '~/components/issues/IssueTerminalToggle.vue'
+import AutoModeDispatchButton from '~/components/issues/AutoModeDispatchButton.vue'
 import { Button } from '~/components/ui/button'
 import {
   Tooltip,
@@ -49,6 +50,9 @@ const props = defineProps<{
   terminalProjectPath?: string
   terminalProjectName?: string
   taskTerminalsEnabled?: boolean
+  autoModeEnabled?: boolean
+  autoModeDispatchingIds?: Set<string>
+  autoModeRunningIds?: Set<string>
 }>()
 
 const emit = defineEmits<{
@@ -59,6 +63,8 @@ const emit = defineEmits<{
   loadMore: []
   sort: [field: string | null, direction: 'asc' | 'desc']
   'toggle-pin': [issueId: string]
+  'auto-dispatch': [issue: Issue]
+  'auto-pause': [issue: Issue]
 }>()
 
 const pinnedSet = computed(() => new Set(props.pinnedIds ?? []))
@@ -647,6 +653,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                   <template v-else-if="col.id === 'title'">
                     <div class="flex items-start gap-2">
                       <span class="min-w-0 flex-1 text-xs font-medium line-clamp-2 break-words">{{ group.epic.title }}</span>
+                      <AutoModeDispatchButton
+                        v-if="autoModeEnabled && group.epic.type !== 'epic'"
+                        :issue-id="group.epic.id"
+                        :issue-status="group.epic.status"
+                        :dispatching="autoModeDispatchingIds?.has(group.epic.id)"
+                        :running="autoModeRunningIds?.has(group.epic.id)"
+                        @dispatch="emit('auto-dispatch', group.epic)"
+                        @pause="emit('auto-pause', group.epic)"
+                      />
                       <IssueTerminalToggle
                         v-if="canOpenTaskTerminal"
                         :issue-id="group.epic.id"
@@ -826,6 +841,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                     <template v-else-if="col.id === 'title'">
                       <div class="flex items-start gap-2">
                         <span class="min-w-0 flex-1 text-xs font-medium line-clamp-2 break-words">{{ child.title }}</span>
+                        <AutoModeDispatchButton
+                          v-if="autoModeEnabled"
+                          :issue-id="child.id"
+                          :issue-status="child.status"
+                          :dispatching="autoModeDispatchingIds?.has(child.id)"
+                          :running="autoModeRunningIds?.has(child.id)"
+                          @dispatch="emit('auto-dispatch', child)"
+                          @pause="emit('auto-pause', child)"
+                        />
                         <IssueTerminalToggle
                           v-if="canOpenTaskTerminal"
                           :issue-id="child.id"
@@ -977,6 +1001,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                   <template v-else-if="col.id === 'title'">
                     <div class="flex items-start gap-2">
                       <span class="min-w-0 flex-1 text-xs font-medium line-clamp-2 break-words">{{ issue.title }}</span>
+                      <AutoModeDispatchButton
+                        v-if="autoModeEnabled"
+                        :issue-id="issue.id"
+                        :issue-status="issue.status"
+                        :dispatching="autoModeDispatchingIds?.has(issue.id)"
+                        :running="autoModeRunningIds?.has(issue.id)"
+                        @dispatch="emit('auto-dispatch', issue)"
+                        @pause="emit('auto-pause', issue)"
+                      />
                       <IssueTerminalToggle
                         v-if="canOpenTaskTerminal"
                         :issue-id="issue.id"

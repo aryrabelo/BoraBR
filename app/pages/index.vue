@@ -12,6 +12,7 @@ import PathSelector from '~/components/dashboard/PathSelector.vue'
 import FolderPicker from '~/components/dashboard/FolderPicker.vue'
 import KpiCard from '~/components/dashboard/KpiCard.vue'
 import DashboardContent from '~/components/dashboard/DashboardContent.vue'
+import AutoModeToggle from '~/components/dashboard/AutoModeToggle.vue'
 import OnboardingCard from '~/components/dashboard/OnboardingCard.vue'
 import PrerequisitesCard from '~/components/dashboard/PrerequisitesCard.vue'
 
@@ -107,6 +108,12 @@ const {
 } = useIssues()
 const { stats, readyIssues, fetchStats, updateFromPollData, clearStats } = useDashboard()
 const { check: checkForUpdates, startPeriodicCheck, stopPeriodicCheck } = useUpdateChecker()
+
+// Auto-mode: dispatch tasks to cmux workspaces
+const inProgressIssuesForAutoMode = computed(() => issues.value.filter(i => i.status === 'in_progress'))
+const { enabled: autoModeEnabled, activeTaskList: autoModeTasks, isDispatching: autoModeDispatching } = useAutoMode(beadsPath, readyIssues, inProgressIssuesForAutoMode)
+const autoModeDispatchingIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'dispatching').map(t => t.issueId)))
+const autoModeRunningIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'running').map(t => t.issueId)))
 const { showDebugPanel, showSettingsDialog } = useAppMenu()
 const { needsRepair, affectedProject, isRepairing, repairError, repairProgress, repair: repairDatabase, repairAll, dismiss: dismissRepair } = useRepairDatabase()
 const { needsMigration, affectedProject: migrateAffectedProject, isMigrating, migrateError, migrate: migrateToDolt, checkProject: checkMigrationNeeded, dismiss: dismissMigration } = useMigrateToDolt()
@@ -919,16 +926,22 @@ const handleRunActionItemInCmux = async (item: ActionCenterItem) => {
   actionCenterTerminalError.value = ''
   actionCenterTerminalErrorItemId.value = item.actionId
   if (!item.cmuxSurfaceId) {
+    await logFrontend('warn', `[action-center] issue ${item.id} has no cmuxSurfaceId (assignee=${item.assignee ?? '-'})`)
     actionCenterTerminalError.value = 'Essa tarefa ainda nao tem CMUX associado. Pegue pelo fluxo de Sign-in/CMUX.'
     return
   }
 
   try {
+    await logFrontend('info', `[action-center] focusing cmux surface ${item.cmuxSurfaceId} for issue ${item.id}`)
     await cmuxFocusSurface(item.cmuxSurfaceId)
+    await logFrontend('info', `[action-center] sending prompt to cmux surface ${item.cmuxSurfaceId} for issue ${item.id}`)
     await cmuxSendPrompt(item.cmuxSurfaceId, buildActionCenterIssuePrompt(item))
+    await logFrontend('info', `[action-center] prompt sent to cmux surface ${item.cmuxSurfaceId} for issue ${item.id}`)
     notifySuccess('Prompt enviado ao CMUX')
   } catch (error) {
-    actionCenterTerminalError.value = error instanceof Error ? error.message : String(error)
+    const message = error instanceof Error ? error.message : String(error)
+    await logFrontend('error', `[action-center] cmux operation failed for issue ${item.id} surface=${item.cmuxSurfaceId}: ${message}`)
+    actionCenterTerminalError.value = message
   }
 }
 
@@ -1136,6 +1149,22 @@ const handleAddIssue = () => {
   } else {
     isRightSidebarOpen.value = true
   }
+}
+
+const handleAutoDispatch = async (issue: Issue) => {
+  const { invoke } = await import('@tauri-apps/api/core')
+  try {
+    await invoke('auto_mode_dispatch', {
+      request: { projectPath: beadsPath.value, issueId: issue.id, issueTitle: issue.title },
+    })
+    notifySuccess(`Dispatched ${issue.id} to cmux`)
+  } catch (e) {
+    notifyError(`Failed to dispatch: ${e}`)
+  }
+}
+
+const handleAutoPause = (_issue: Issue) => {
+  // TODO: implement pause (stop agent in cmux surface)
 }
 
 const handleSelectIssue = async (issue: Issue) => {
@@ -1442,7 +1471,10 @@ watch(
         <div v-if="isLeftSidebarOpen" class="flex-1 flex flex-col overflow-hidden">
           <!-- Top section (fixed content) -->
           <div class="p-4 space-y-4 shrink-0">
-            <PathSelector v-if="!showOnboarding" ref="pathSelectorRef" :is-loading="isLoading" @change="handlePathChange" @reset="handleReset" />
+            <div class="flex items-center gap-2">
+              <PathSelector v-if="!showOnboarding" ref="pathSelectorRef" class="flex-1" :is-loading="isLoading" @change="handlePathChange" @reset="handleReset" />
+              <AutoModeToggle v-if="!showOnboarding" />
+            </div>
             <Button
               variant="outline"
               class="w-full h-12 justify-between border-primary/30 bg-primary/5"
@@ -1647,6 +1679,9 @@ watch(
               :terminal-project-path="beadsPath"
               :terminal-project-name="currentProjectName"
               task-terminals-enabled
+              :auto-mode-enabled="autoModeEnabled"
+              :auto-mode-dispatching-ids="autoModeDispatchingIds"
+              :auto-mode-running-ids="autoModeRunningIds"
               @add="handleAddIssue"
               @delete="handleDeleteIssue"
               @toggle-multi-select="toggleMultiSelect"
@@ -1665,6 +1700,8 @@ watch(
               @load-more="loadMore"
               @sort="setSort"
               @toggle-pin="togglePin"
+              @auto-dispatch="handleAutoDispatch"
+              @auto-pause="handleAutoPause"
             />
 
             <div v-if="isLoading" class="text-center text-muted-foreground py-4">
@@ -1997,6 +2034,9 @@ watch(
           :terminal-project-path="beadsPath"
           :terminal-project-name="currentProjectName"
           task-terminals-enabled
+          :auto-mode-enabled="autoModeEnabled"
+          :auto-mode-dispatching-ids="autoModeDispatchingIds"
+          :auto-mode-running-ids="autoModeRunningIds"
           @add="handleAddIssue"
           @delete="handleDeleteIssue"
           @toggle-multi-select="toggleMultiSelect"
@@ -2015,6 +2055,8 @@ watch(
           @load-more="loadMore"
           @sort="setSort"
           @toggle-pin="togglePin"
+          @auto-dispatch="handleAutoDispatch"
+          @auto-pause="handleAutoPause"
         />
 
         <TerminalPanel
