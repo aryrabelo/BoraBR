@@ -3644,13 +3644,12 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
     // 1. Claim issue via br
     let claim_args = vec![
-        "update".to_string(),
         "--actor".to_string(), "auto-mode".to_string(),
         issue_id.to_string(),
         "--status".to_string(), "in_progress".to_string(),
         "--claim".to_string(),
     ];
-    execute_bd("update", &claim_args[2..].to_vec(), Some(project_path))?;
+    execute_bd("update", &claim_args, Some(project_path))?;
 
     // 2. Create git worktree
     let worktree_output = new_command("git")
