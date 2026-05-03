@@ -1,0 +1,23 @@
+src-tauri/src/lib.rs
+  bd8377e09a1da997 3661-3672,3707,3709-3710,3718-3719,3734,3736-3737,8507-8563
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "6ab756f1b15e689b0cca894591c1371f27a03f54",
+  "prompts": {
+    "bd8377e09a1da997": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "091d9bb8-8ade-41d8-a3ea-88c2fc607cce",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 8644,
+      "total_deletions": 6,
+      "accepted_lines": 78,
+      "overriden_lines": 0
+    }
+  }
+}
