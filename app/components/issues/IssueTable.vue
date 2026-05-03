@@ -25,7 +25,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '~/components/ui/tooltip'
-import { Ban, SquareTerminal } from 'lucide-vue-next'
+import { AlertCircle, Ban, SquareTerminal } from 'lucide-vue-next'
 import { useKeyboardNavigation } from '~/composables/useKeyboardNavigation'
 import { useTaskTerminalSlots } from '~/composables/useTaskTerminalSlots'
 import { cmuxFocusSurface, logFrontend } from '~/utils/bd-api'
@@ -54,6 +54,7 @@ const props = defineProps<{
   autoModeEnabled?: boolean
   autoModeDispatchingIds?: Set<string>
   autoModeRunningIds?: Set<string>
+  autoModeFailedTasks?: Map<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -679,6 +680,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                       <Badge v-else-if="autoModeDispatchingIds?.has(group.epic.id)" class="text-[10px] px-1.5 py-0 bg-yellow-600 text-white animate-pulse">LAUNCHING</Badge>
                       <StatusBadge v-else :status="group.epic.status" size="sm" />
                       <ReviewStateBadge v-if="group.epic.status === 'in_review'" :issue="group.epic" />
+                      <Tooltip v-if="autoModeFailedTasks?.has(group.epic.id)">
+                        <TooltipTrigger as-child>
+                          <AlertCircle class="w-3.5 h-3.5 text-red-500" />
+                        </TooltipTrigger>
+                        <TooltipContent side="top" class="max-w-xs">
+                          <p class="text-xs font-medium text-red-400">Auto-mode failed</p>
+                          <p class="text-xs break-words">{{ autoModeFailedTasks!.get(group.epic.id) }}</p>
+                        </TooltipContent>
+                      </Tooltip>
                       <Tooltip v-if="group.epic.blockedBy?.length">
                         <TooltipTrigger as-child>
                           <Ban class="w-3 h-3 text-red-400" />
@@ -869,6 +879,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                         <Badge v-else-if="autoModeDispatchingIds?.has(child.id)" class="text-[10px] px-1.5 py-0 bg-yellow-600 text-white animate-pulse">LAUNCHING</Badge>
                         <StatusBadge v-else :status="child.status" size="sm" />
                         <ReviewStateBadge v-if="child.status === 'in_review'" :issue="child" />
+                        <Tooltip v-if="autoModeFailedTasks?.has(child.id)">
+                          <TooltipTrigger as-child>
+                            <AlertCircle class="w-3.5 h-3.5 text-red-500" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" class="max-w-xs">
+                            <p class="text-xs font-medium text-red-400">Auto-mode failed</p>
+                            <p class="text-xs break-words">{{ autoModeFailedTasks!.get(child.id) }}</p>
+                          </TooltipContent>
+                        </Tooltip>
                         <Tooltip v-if="child.blockedBy?.length">
                           <TooltipTrigger as-child>
                             <Ban class="w-3 h-3 text-red-400" />
@@ -1031,6 +1050,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                       <Badge v-else-if="autoModeDispatchingIds?.has(issue.id)" class="text-[10px] px-1.5 py-0 bg-yellow-600 text-white animate-pulse">LAUNCHING</Badge>
                       <StatusBadge v-else :status="issue.status" size="sm" />
                       <ReviewStateBadge v-if="issue.status === 'in_review'" :issue="issue" />
+                      <Tooltip v-if="autoModeFailedTasks?.has(issue.id)">
+                        <TooltipTrigger as-child>
+                          <AlertCircle class="w-3.5 h-3.5 text-red-500" />
+                        </TooltipTrigger>
+                        <TooltipContent side="top" class="max-w-xs">
+                          <p class="text-xs font-medium text-red-400">Auto-mode failed</p>
+                          <p class="text-xs break-words">{{ autoModeFailedTasks!.get(issue.id) }}</p>
+                        </TooltipContent>
+                      </Tooltip>
                       <Tooltip v-if="issue.blockedBy?.length">
                         <TooltipTrigger as-child>
                           <Ban class="w-3 h-3 text-red-400" />
@@ -1185,6 +1213,15 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                   <Badge v-else-if="autoModeDispatchingIds?.has(issue.id)" class="text-[10px] px-1.5 py-0 bg-yellow-600 text-white animate-pulse">LAUNCHING</Badge>
                   <StatusBadge v-else :status="issue.status" size="sm" />
                   <ReviewStateBadge v-if="issue.status === 'in_review'" :issue="issue" />
+                  <Tooltip v-if="autoModeFailedTasks?.has(issue.id)">
+                    <TooltipTrigger as-child>
+                      <AlertCircle class="w-3.5 h-3.5 text-red-500" />
+                    </TooltipTrigger>
+                    <TooltipContent side="top" class="max-w-xs">
+                      <p class="text-xs font-medium text-red-400">Auto-mode failed</p>
+                      <p class="text-xs break-words">{{ autoModeFailedTasks!.get(issue.id) }}</p>
+                    </TooltipContent>
+                  </Tooltip>
                   <Tooltip v-if="issue.blockedBy?.length">
                     <TooltipTrigger as-child>
                       <Ban class="w-3 h-3 text-red-400" />
