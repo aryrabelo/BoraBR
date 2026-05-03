@@ -1,0 +1,31 @@
+app/composables/useAutoMode.ts
+  9bd5894be794fb21 4,271-290,337
+app/components/issues/IssueTable.vue
+  9bd5894be794fb21 22,70,681,872,1035,1190
+app/components/issues/IssueListPanel.vue
+  9bd5894be794fb21 58,137
+app/components/issues/AutoModeSendMessage.vue
+  9bd5894be794fb21 1-89
+app/pages/index.vue
+  9bd5894be794fb21 120,1195-1203,1736,2092
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "79faee01eac519040dbaf865146ecd6901f0b444",
+  "prompts": {
+    "9bd5894be794fb21": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "186d2907-8fe5-4328-832c-4d51ac10771b",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 1984,
+      "total_deletions": 3,
+      "accepted_lines": 1984,
+      "overriden_lines": 0
+    }
+  }
+}
