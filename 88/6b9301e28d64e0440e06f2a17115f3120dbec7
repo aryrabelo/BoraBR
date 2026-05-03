@@ -1,0 +1,29 @@
+.claude/auto-mode/executor.md
+  222c8dcdfb5ac54c 1-29
+.claude/auto-mode/orchestrator.md
+  222c8dcdfb5ac54c 1-57
+.claude/auto-mode/reviewer.md
+  222c8dcdfb5ac54c 1-39
+.claude/auto-mode/base.md
+  222c8dcdfb5ac54c 1-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "886b9301e28d64e0440e06f2a17115f3120dbec7",
+  "prompts": {
+    "222c8dcdfb5ac54c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2db86c46-9d2c-4b95-b1cf-740c7789ccaf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 282,
+      "total_deletions": 52,
+      "accepted_lines": 192,
+      "overriden_lines": 0
+    }
+  }
+}
