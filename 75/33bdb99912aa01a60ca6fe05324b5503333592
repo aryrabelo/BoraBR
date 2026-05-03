@@ -1,0 +1,31 @@
+.claude/auto-mode/orchestrator.md
+  3c1a1db1621bd7c9 1-44
+.claude/auto-mode/base.md
+  3c1a1db1621bd7c9 1-29
+.claude/auto-mode/executor.md
+  3c1a1db1621bd7c9 1-19
+src-tauri/src/lib.rs
+  3c1a1db1621bd7c9 3688-3711,3713,3715-3716,3719,3727,3743,8344,8353-8355,8357-8358,8362,8371-8377,8463,8474-8480,8482,8496-8527
+.claude/auto-mode/reviewer.md
+  3c1a1db1621bd7c9 1-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "7533bdb99912aa01a60ca6fe05324b5503333592",
+  "prompts": {
+    "3c1a1db1621bd7c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6a135228-887b-41ee-baad-a639a980fea8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 8714,
+      "total_deletions": 8577,
+      "accepted_lines": 217,
+      "overriden_lines": 0
+    }
+  }
+}
