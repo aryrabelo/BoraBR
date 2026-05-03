@@ -2,6 +2,7 @@ import { ref, watch, onUnmounted, computed } from 'vue'
 import { useProjectStorage } from './useProjectStorage'
 import { invoke } from '@tauri-apps/api/core'
 import { logFrontend } from '~/utils/bd-api'
+import { appendAutoModeLog, type AutoModeEventType } from '~/utils/auto-mode-log'
 import type { Issue } from '~/types/issue'
 
 export interface AutoModeTask {
@@ -112,6 +113,11 @@ export function useAutoMode(
   let readyPollTimer: ReturnType<typeof setInterval> | null = null
   let isRefreshingReady = false
 
+  function logEvent(eventType: AutoModeEventType, issueId: string, detail: string, extra?: { surface?: string, error?: string }) {
+    if (!projectPath.value) return
+    appendAutoModeLog(projectPath.value, { issueId, eventType, detail, ...extra })
+  }
+
   const hasRunningTask = computed(() => {
     for (const task of activeTaskMap.value.values()) {
       if (task.status === 'dispatching' || task.status === 'running' || task.status === 'reviewing') {
@@ -183,6 +189,7 @@ export function useAutoMode(
 
     try {
       logFrontend('info', `[auto-mode] Dispatching ${issue.id}: ${issue.title}`)
+      logEvent('dispatch_start', issue.id, `Dispatching: ${issue.title}`)
 
       const result = await invoke<AutoModeDispatchResponse>('auto_mode_dispatch', {
         request: {
@@ -198,12 +205,14 @@ export function useAutoMode(
       activeTaskMap.value = new Map(activeTaskMap.value.set(issue.id, { ...task }))
 
       logFrontend('info', `[auto-mode] Task ${issue.id} running on surface ${result.surface}`)
+      logEvent('dispatch_success', issue.id, `Running on ${result.surface}, branch ${result.branch}`, { surface: result.surface })
       lastDispatchAt.value = Date.now()
     } catch (e) {
       task.status = 'failed'
       task.error = String(e)
       activeTaskMap.value = new Map(activeTaskMap.value.set(issue.id, { ...task }))
       logFrontend('error', `[auto-mode] Failed to dispatch ${issue.id}: ${e}`)
+      logEvent('dispatch_failed', issue.id, `Dispatch failed`, { error: String(e) })
     } finally {
       isDispatching.value = false
     }
@@ -219,6 +228,7 @@ export function useAutoMode(
 
     try {
       logFrontend('info', `[auto-mode] Dispatching reviewer for ${issueId} (commit ${executorCommit})`)
+      logEvent('review_start', issueId, `Review dispatched for commit ${executorCommit}`)
 
       const result = await invoke<AutoModeDispatchReviewResponse>('auto_mode_dispatch_review', {
         request: {
@@ -231,11 +241,13 @@ export function useAutoMode(
       })
 
       logFrontend('info', `[auto-mode] Reviewer running on ${result.surface} for ${issueId}`)
+      logEvent('review_start', issueId, `Reviewer running on ${result.surface}`, { surface: result.surface })
     } catch (e) {
       task.status = 'failed'
       task.error = `Review dispatch failed: ${e}`
       activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
       logFrontend('error', `[auto-mode] Failed to dispatch reviewer for ${issueId}: ${e}`)
+      logEvent('review_failed', issueId, `Review dispatch failed`, { error: String(e) })
     }
   }
 
@@ -248,6 +260,7 @@ export function useAutoMode(
 
     try {
       logFrontend('info', `[auto-mode] Merging approved task ${issueId}`)
+      logEvent('merge_start', issueId, `Merge started`)
 
       const result = await invoke<AutoModeMergeApprovedResponse>('auto_mode_merge_approved', {
         request: {
@@ -260,11 +273,13 @@ export function useAutoMode(
       task.status = 'done'
       activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
       logFrontend('info', `[auto-mode] Task ${issueId} merged=${result.merged} closed=${result.closed} worktree_removed=${result.worktreeRemoved}`)
+      logEvent('merge_success', issueId, `Merged=${result.merged} closed=${result.closed} worktree_removed=${result.worktreeRemoved}`)
     } catch (e) {
       task.status = 'failed'
       task.error = `Merge failed: ${e}`
       activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
       logFrontend('error', `[auto-mode] Merge failed for ${issueId}: ${e}`)
+      logEvent('merge_failed', issueId, `Merge failed`, { error: String(e) })
     }
   }
 
@@ -284,10 +299,12 @@ export function useAutoMode(
   watch(enabled, (on) => {
     if (on) {
       logFrontend('info', `[auto-mode] Enabled for ${projectPath.value}`)
+      logEvent('enabled', '-', `Auto-mode enabled for ${projectPath.value}`)
       startReadyPolling()
       tryDispatch()
     } else {
       logFrontend('info', `[auto-mode] Disabled`)
+      logEvent('disabled', '-', `Auto-mode disabled`)
       stopReadyPolling()
     }
   })

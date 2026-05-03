@@ -14,6 +14,7 @@ import KpiCard from '~/components/dashboard/KpiCard.vue'
 import DashboardContent from '~/components/dashboard/DashboardContent.vue'
 import OnboardingCard from '~/components/dashboard/OnboardingCard.vue'
 import PrerequisitesCard from '~/components/dashboard/PrerequisitesCard.vue'
+import AutoModeLogPanel from '~/components/dashboard/AutoModeLogPanel.vue'
 
 
 // Details components
@@ -123,6 +124,7 @@ const { enabled: autoModeEnabled, activeTaskList: autoModeTasks, isDispatching: 
 const autoModeDispatchingIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'dispatching').map(t => t.issueId)))
 const autoModeRunningIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'running').map(t => t.issueId)))
 const { showDebugPanel, showSettingsDialog } = useAppMenu()
+const showAutoModeLog = ref(false)
 const { needsRepair, affectedProject, isRepairing, repairError, repairProgress, repair: repairDatabase, repairAll, dismiss: dismissRepair } = useRepairDatabase()
 const { needsMigration, affectedProject: migrateAffectedProject, isMigrating, migrateError, migrate: migrateToDolt, checkProject: checkMigrationNeeded, dismiss: dismissMigration } = useMigrateToDolt()
 const { needsMigration: needsRefsMigration, refCount: refsRefCount, isMigrating: isRefsMigrating, migrateError: refsMigrateError, checkProject: checkRefsMigration, migrate: migrateRefs, dismiss: dismissRefsMigration } = useMigrateRefs()
@@ -2151,6 +2153,9 @@ watch(
       </div>
     </div>
 
+    <!-- Auto-Mode Log Panel (above footer) -->
+    <AutoModeLogPanel v-model:is-open="showAutoModeLog" />
+
     <!-- Debug Panel (above footer) -->
     <DebugPanel v-model:is-open="showDebugPanel" />
 
@@ -2172,6 +2177,21 @@ watch(
             <path d="M6 13H2" /><path d="M3 21c0-2.1 1.7-3.9 3.8-4" />
             <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4" /><path d="M22 13h-4" />
             <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4" />
+          </svg>
+        </button>
+
+        <!-- Auto-mode log toggle -->
+        <button
+          v-if="autoModeEnabled"
+          class="flex items-center gap-1 hover:text-foreground transition-colors"
+          :class="showAutoModeLog ? 'text-foreground' : ''"
+          title="Toggle Auto-Mode Log"
+          @click="showAutoModeLog = !showAutoModeLog"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+            <path d="M14 2v6h6" />
+            <path d="M16 13H8" /><path d="M16 17H8" /><path d="M10 9H8" />
           </svg>
         </button>
 

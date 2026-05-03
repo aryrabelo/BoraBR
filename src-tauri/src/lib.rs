@@ -4190,6 +4190,112 @@ async fn auto_mode_merge_approved(request: AutoModeMergeApprovedRequest) -> Resu
     })
 }
 
+// ============================================================================
+// Auto-Mode Activity Log
+// ============================================================================
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeLogEntry {
+    pub timestamp: String,
+    pub issue_id: String,
+    pub event_type: String,
+    pub detail: String,
+    #[serde(default)]
+    pub surface: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeLogRecord {
+    pub timestamp: String,
+    pub issue_id: String,
+    pub event_type: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn auto_mode_log_path(project_path: &str) -> PathBuf {
+    std::path::Path::new(project_path).join(".beads").join("auto-mode-log.jsonl")
+}
+
+#[tauri::command]
+async fn auto_mode_log_append(project_path: String, entry: AutoModeLogEntry) -> Result<(), String> {
+    let log_path = auto_mode_log_path(&project_path);
+
+    if let Some(parent) = log_path.parent() {
+        if !parent.exists() {
+            return Err("Project .beads/ directory does not exist".to_string());
+        }
+    }
+
+    let record = AutoModeLogRecord {
+        timestamp: entry.timestamp,
+        issue_id: entry.issue_id,
+        event_type: entry.event_type,
+        detail: entry.detail,
+        surface: entry.surface,
+        error: entry.error,
+    };
+
+    let mut line = serde_json::to_string(&record)
+        .map_err(|e| format!("Failed to serialize log entry: {}", e))?;
+    line.push('\n');
+
+    use std::io::Write;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("Failed to open log file: {}", e))?;
+    let mut writer = std::io::BufWriter::new(file);
+    writer.write_all(line.as_bytes())
+        .map_err(|e| format!("Failed to write log entry: {}", e))?;
+    writer.flush()
+        .map_err(|e| format!("Failed to flush log file: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn auto_mode_log_read(project_path: String, limit: Option<usize>) -> Result<Vec<AutoModeLogRecord>, String> {
+    let log_path = auto_mode_log_path(&project_path);
+    if !log_path.exists() {
+        return Ok(vec![]);
+    }
+
+    let content = fs::read_to_string(&log_path)
+        .map_err(|e| format!("Failed to read log file: {}", e))?;
+
+    let mut records: Vec<AutoModeLogRecord> = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+
+    if let Some(limit) = limit {
+        let skip = records.len().saturating_sub(limit);
+        records = records.into_iter().skip(skip).collect();
+    }
+
+    Ok(records)
+}
+
+#[tauri::command]
+async fn auto_mode_log_clear(project_path: String) -> Result<(), String> {
+    let log_path = auto_mode_log_path(&project_path);
+    if log_path.exists() {
+        fs::write(&log_path, "")
+            .map_err(|e| format!("Failed to clear log file: {}", e))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn terminal_native_renderer_capabilities() -> Result<TerminalNativeRendererCapabilitiesResponse, String> {
     Ok(detect_native_terminal_renderer_capabilities())
@@ -7664,6 +7770,9 @@ pub fn run() {
             auto_mode_dispatch,
             auto_mode_dispatch_review,
             auto_mode_merge_approved,
+            auto_mode_log_append,
+            auto_mode_log_read,
+            auto_mode_log_clear,
             terminal_native_renderer_capabilities,
             terminal_open_native_renderer,
             terminal::terminal_create,
