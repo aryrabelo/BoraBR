@@ -1,0 +1,33 @@
+package.json
+  dcec8c4620f71baa 42
+app/composables/useAutoMode.ts
+  dcec8c4620f71baa 3,109,209,242,267,273
+app/composables/useDesktopNotification.ts
+  dcec8c4620f71baa 1-101
+src-tauri/Cargo.toml
+  dcec8c4620f71baa 32
+src-tauri/capabilities/default.json
+  dcec8c4620f71baa 13-14
+src-tauri/src/lib.rs
+  dcec8c4620f71baa 7539
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "13571431864339be4dde4f0018aaa92e51001ee0",
+  "prompts": {
+    "dcec8c4620f71baa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d40ac99a-f2e4-43f1-80d3-991710621bec",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 571,
+      "total_deletions": 8542,
+      "accepted_lines": 570,
+      "overriden_lines": 0
+    }
+  }
+}
