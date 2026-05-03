@@ -1,0 +1,29 @@
+app/utils/watchdog-sessions.ts
+  b0310b6335d56cfe 1-88
+app/composables/useAutoMode.ts
+  b0310b6335d56cfe 6-11,121-124,315-351
+src-tauri/src/lib.rs
+  b0310b6335d56cfe 4193-4212,7687
+tests/utils/watchdog-sessions.test.ts
+  b0310b6335d56cfe 1-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "0ea92cb90bb450f73edd8e05c9cdfdefce11b6bf",
+  "prompts": {
+    "b0310b6335d56cfe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a17e3c0c-98df-453e-9674-3708fff274d3",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 286,
+      "total_deletions": 7,
+      "accepted_lines": 280,
+      "overriden_lines": 0
+    }
+  }
+}
