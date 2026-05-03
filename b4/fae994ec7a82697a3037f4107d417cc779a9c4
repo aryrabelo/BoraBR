@@ -1,0 +1,27 @@
+app/composables/useAutoMode.ts
+  5ec76de614a08787 11,19,21,69,122,131,174-246,375,380,392,434
+tests/utils/watchdog-sessions.test.ts
+  5ec76de614a08787 8-9,39,48,128-176
+app/utils/watchdog-sessions.ts
+  5ec76de614a08787 10,14-15,26,58,94-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "b4fae994ec7a82697a3037f4107d417cc779a9c4",
+  "prompts": {
+    "5ec76de614a08787": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c671c6bc-320c-4ae5-a69a-21ebed73be73",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 660,
+      "total_deletions": 20,
+      "accepted_lines": 657,
+      "overriden_lines": 0
+    }
+  }
+}
