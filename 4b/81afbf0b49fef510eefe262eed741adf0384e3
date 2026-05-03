@@ -1,0 +1,33 @@
+src-tauri/src/lib.rs
+  52af641d76ff77f2 4193-4298,7773-7775
+app/utils/auto-mode-log.ts
+  52af641d76ff77f2 1-83
+app/components/dashboard/AutoModeLogPanel.vue
+  52af641d76ff77f2 1-227
+app/composables/useAutoMode.ts
+  52af641d76ff77f2 5,116-120,192,208,215,231,244,250,263,276,282,302,307
+app/pages/index.vue
+  52af641d76ff77f2 17,127,2156-2158,2183-2197
+tests/utils/auto-mode-log.test.ts
+  52af641d76ff77f2 1-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "4b81afbf0b49fef510eefe262eed741adf0384e3",
+  "prompts": {
+    "52af641d76ff77f2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cc272836-409f-434d-a599-cdf56387d6e0",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 1108,
+      "total_deletions": 8604,
+      "accepted_lines": 1104,
+      "overriden_lines": 0
+    }
+  }
+}
