@@ -1,0 +1,25 @@
+src-tauri/src/lib.rs
+  990e7e8106b863da 3696,3704,4083,4090-4091,4099,4114,4116-4118,4122,4124-4128,4130,4132-4149,4153,4155-4157,4159,4162,4166-4177,4179,4183-4184,8332-8336,8341,8360-8362
+app/composables/useAutoMode.ts
+  990e7e8106b863da 45,50-51,251,257,264,267,269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "b281e46a53c9f277d601bf4d501088ce4ec746ab",
+  "prompts": {
+    "990e7e8106b863da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b2039ff6-c4a1-48d6-a4df-859931a9ac22",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 8885,
+      "total_deletions": 73,
+      "accepted_lines": 395,
+      "overriden_lines": 0
+    }
+  }
+}
