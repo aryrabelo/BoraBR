@@ -1,0 +1,27 @@
+tests/composables/useAutoMode.test.ts
+  302fce888846175f 91,105
+app/composables/useAutoMode.ts
+  302fce888846175f 68,132,371-377
+app/utils/auto-mode-log.ts
+  302fce888846175f 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "15e8b499af2494c12d1dd0a850acd24c9d5a57bf",
+  "prompts": {
+    "302fce888846175f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b3b8ab15-e827-4110-8fb2-adac63cb0ac2",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 12,
+      "total_deletions": 39,
+      "accepted_lines": 12,
+      "overriden_lines": 0
+    }
+  }
+}
