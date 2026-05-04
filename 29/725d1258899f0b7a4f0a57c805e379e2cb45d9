@@ -1,0 +1,33 @@
+app/composables/useAutoMode.ts
+  01707aec1acd73f5 45-54,122-143,184-207,209-211,214
+tests/utils/action-center.test.ts
+  01707aec1acd73f5 10-11,87,105,124-204
+.beads/issues.jsonl
+  01707aec1acd73f5 21-24
+app/utils/action-center.ts
+  01707aec1acd73f5 138-182,186,188,205
+app/pages/index.vue
+  01707aec1acd73f5 74,580,602-613
+tests/composables/useAutoMode.test.ts
+  01707aec1acd73f5 4,74-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "29725d1258899f0b7a4f0a57c805e379e2cb45d9",
+  "prompts": {
+    "01707aec1acd73f5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019df3c7-c9d0-7062-ad5b-3500284b4536",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 251,
+      "total_deletions": 27,
+      "accepted_lines": 524,
+      "overriden_lines": 2
+    }
+  }
+}
