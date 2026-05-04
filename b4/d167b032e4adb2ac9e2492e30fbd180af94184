@@ -1,0 +1,23 @@
+tests/composables/useAutoMode.test.ts
+  7eaf83797a9704cd 124-145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "b4d167b032e4adb2ac9e2492e30fbd180af94184",
+  "prompts": {
+    "7eaf83797a9704cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "415ce1ab-d6bb-4bee-9daa-50197b67bfc5",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 22,
+      "total_deletions": 0,
+      "accepted_lines": 22,
+      "overriden_lines": 0
+    }
+  }
+}
