@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Issue } from '~/types/issue'
 import {
+  getAutoModeLifecycleAction,
   hasAutoModeInProgressTask,
   pickAutoModeIssue,
   type AutoModeTask,
@@ -66,5 +67,58 @@ describe('hasAutoModeInProgressTask', () => {
     expect(hasAutoModeInProgressTask([
       makeIssue({ id: 'borabr-unf.1', type: 'task', status: 'in_progress' }),
     ])).toBe(true)
+  })
+})
+
+describe('getAutoModeLifecycleAction', () => {
+  it('dispatches review when an active running task has executor completion evidence', () => {
+    const action = getAutoModeLifecycleAction(
+      makeTask({ issueId: 'borabr-unf.1', status: 'running' }),
+      makeIssue({
+        id: 'borabr-unf.1',
+        comments: [{
+          id: '1',
+          author: 'auto-mode',
+          content: 'EXECUTOR_COMPLETE\ncommit: abc123\nsummary: done',
+          createdAt: '2026-05-01T12:01:00.000Z',
+        }],
+      }),
+    )
+
+    expect(action).toEqual({ type: 'dispatch_review', commit: 'abc123' })
+  })
+
+  it('merges when an active reviewing task has an approved verdict', () => {
+    const action = getAutoModeLifecycleAction(
+      makeTask({ issueId: 'borabr-unf.1', status: 'reviewing' }),
+      makeIssue({
+        id: 'borabr-unf.1',
+        comments: [{
+          id: '2',
+          author: 'auto-mode',
+          content: 'REVIEW_VERDICT: APPROVED\nSummary: ok',
+          createdAt: '2026-05-01T12:02:00.000Z',
+        }],
+      }),
+    )
+
+    expect(action).toEqual({ type: 'merge_approved' })
+  })
+
+  it('marks review failure when a reviewer requests changes', () => {
+    const action = getAutoModeLifecycleAction(
+      makeTask({ issueId: 'borabr-unf.1', status: 'reviewing' }),
+      makeIssue({
+        id: 'borabr-unf.1',
+        comments: [{
+          id: '3',
+          author: 'auto-mode',
+          content: 'REVIEW_VERDICT: CHANGES_REQUESTED\nFindings: broken',
+          createdAt: '2026-05-01T12:03:00.000Z',
+        }],
+      }),
+    )
+
+    expect(action).toEqual({ type: 'review_failed', error: 'REVIEW_VERDICT: CHANGES_REQUESTED\nFindings: broken' })
   })
 })

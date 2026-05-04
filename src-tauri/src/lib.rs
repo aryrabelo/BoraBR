@@ -31,6 +31,10 @@ static CLI_BINARY: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new("bd".to
 static PROBE_CHILD: LazyLock<Mutex<Option<std::process::Child>>> =
     LazyLock::new(|| Mutex::new(None));
 
+// caffeinate child process — prevents Mac sleep during auto-mode
+static CAFFEINATE_CHILD: LazyLock<Mutex<Option<std::process::Child>>> =
+    LazyLock::new(|| Mutex::new(None));
+
 // Per-project mutex to prevent concurrent bd/Dolt access.
 // bd 0.55 uses embedded Dolt which crashes (SIGSEGV) when two bd processes
 // access the same database simultaneously. This serializes all bd calls per project.
@@ -3667,33 +3671,71 @@ struct AutoModeDispatchScope {
 }
 
 fn auto_mode_dispatch_scope(epic_id: &str, issue_id: &str) -> AutoModeDispatchScope {
+    let epic_branch = format!("epic/{}", epic_id);
+    let epic_worktree_name = format!("epic-{}", epic_id);
     if issue_id == epic_id {
         AutoModeDispatchScope {
-            branch: format!("epic-{}", epic_id),
-            worktree_name: epic_id.to_string(),
+            branch: epic_branch,
+            worktree_name: epic_worktree_name,
             workspace_name: format!("epic:{}", epic_id),
             is_epic: true,
         }
     } else {
-        let task_name = format!("task-{}", issue_id);
         AutoModeDispatchScope {
-            branch: task_name.clone(),
-            worktree_name: task_name,
+            branch: epic_branch,
+            worktree_name: epic_worktree_name,
             workspace_name: format!("task:{}", issue_id),
             is_epic: false,
         }
     }
 }
 
+fn find_latest_claude_session_id(worktree_path: &str) -> Option<String> {
+    let sanitized = worktree_path.replace('/', "-");
+    let trimmed = sanitized.trim_start_matches('-');
+    let sessions_dir = dirs::home_dir()?.join(".claude").join("projects").join(trimmed);
+
+    if !sessions_dir.is_dir() {
+        log::info!("[session-resume] No Claude sessions dir at {}", sessions_dir.display());
+        return None;
+    }
+
+    let mut newest: Option<(String, std::time::SystemTime)> = None;
+    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".jsonl") {
+                let session_id = name.trim_end_matches(".jsonl").to_string();
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if newest.as_ref().map_or(true, |(_, t)| modified > *t) {
+                            newest = Some((session_id, modified));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some((id, _)) = &newest {
+        log::info!("[session-resume] Found latest session {} for {}", id, worktree_path);
+    }
+    newest.map(|(id, _)| id)
+}
+
+fn build_auto_mode_resume_command(worktree_path: &str) -> Option<String> {
+    let session_id = find_latest_claude_session_id(worktree_path)?;
+    Some(format!("claude --resume {}", shell_single_quote(&session_id)))
+}
+
 fn build_auto_mode_executor_command(
-    epic_id: &str,
+    _epic_id: &str,
     issue_id: &str,
-    issue_title: &str,
-    cmux_ref: &str,
+    _issue_title: &str,
+    _cmux_ref: &str,
 ) -> String {
-    let assignee = format!("cmux:{}", cmux_ref);
     let prompt = format!(
-        "You are an executor for Beads task {issue_id} in epic {epic_id}. Task title: {issue_title}. This cmux workspace is {cmux_ref}; use BR assignee {assignee}. First run `br show {issue_id}`. Then claim/focus the task with `br update {issue_id} --status in_progress --assignee {assignee} --json`, implement only this task, run relevant tests, commit atomically on branch `task-{issue_id}`, and signal completion with a structured comment containing the commit hash. Do not work unrelated tasks and do not touch main directly.",
+        "Read .claude/auto-mode-prompt.md and follow the instructions exactly. You are executing a SINGLE task only: {issue_id}. Run `br show {issue_id} --json` first, then claim it with `br update --actor auto-mode {issue_id} --status in_progress --claim --json`. Implement the task, run tests, commit, then close with `br close --actor auto-mode {issue_id} --reason \"<what you did>\"` and `br sync --flush-only`. Do NOT loop or pick other tasks.",
     );
 
     format!("claude {}", shell_single_quote(&prompt))
@@ -3701,7 +3743,23 @@ fn build_auto_mode_executor_command(
 
 fn build_auto_mode_epic_orchestrator_command(epic_id: &str) -> String {
     let prompt = format!(
-        "You are an orchestrator for Beads epic {epic_id}. Loop until no open ready child tasks remain. 1) Run `br ready --json` and filter to non-epic child tasks whose id starts with `{epic_id}.`; if you need the full open set, run `br list --json | jq '(.issues? // .)[] | select(.id | startswith(\"{epic_id}.\")) | select(.status==\"open\") | select(.issue_type!=\"epic\")'`. 2) Pick the highest-priority ready task; when multiple ready tasks have no dependencies, dispatch them in parallel with separate cmux workspaces and git worktrees named `task-<issue-id>` on branches `task-<issue-id>`. 3) Spawn a separate Claude executor per task with issue context; executors must claim, implement, test, commit atomically, add a structured executor-complete comment containing the commit hash, and avoid touching main directly. 4) After each executor completion signal, spawn an independent Claude reviewer with fresh context. The reviewer must run relevant tests/type-check/build, review the diff against `br show <issue-id>`, and produce a structured approve/request-changes verdict comment. 5) If review approves, merge the task branch into main. If merge conflicts or fails, abort the merge, report the conflict, and keep the worktree and issue open. If merge succeeds, remove the task worktree, delete the task branch when safe, close the BR issue, and run `br sync --flush-only`. If review requests changes, report findings back and keep the worktree and issue open for retry. Use agents for parallel work when dependencies allow.",
+        "Read .claude/auto-mode-prompt.md and follow the instructions exactly. Replace EPIC_ID with {epic_id}. The br CLI is your issue tracker — use `br` (never `bd`). Always pass `--actor auto-mode` and `--json` flags. Loop through all open tasks in the epic, claim each before working, close each when done with evidence. Do NOT skip the claim or close steps.",
+    );
+
+    format!("claude {}", shell_single_quote(&prompt))
+}
+
+fn build_auto_mode_reviewer_command(
+    epic_id: &str,
+    issue_id: &str,
+    issue_title: &str,
+    task_branch: &str,
+    executor_commit: &str,
+    cmux_ref: &str,
+) -> String {
+    let assignee = format!("cmux:{}", cmux_ref);
+    let prompt = format!(
+        "You are an independent reviewer for Beads task {issue_id} in epic {epic_id}. Task title: {issue_title}. You have fresh context — no bias from the executor. Branch: `{task_branch}`, executor commit: {executor_commit}. Steps: 1) Run `br show {issue_id}` to understand requirements. 2) Run `git log --oneline master..{task_branch}` and `git diff master...{task_branch}` to see all changes. 3) Run quality gates: `pnpm test` and `npx vue-tsc --noEmit`. 4) Review the diff against the task requirements — check correctness, test coverage, no unrelated changes, no security issues. 5) Add a structured BR comment with your verdict: `br comments add --actor auto-mode {issue_id} --message 'REVIEW_VERDICT: APPROVED|CHANGES_REQUESTED\\nSummary: ...\\nFindings: ...' --json`. Use assignee {assignee}. If tests or type-check fail, verdict must be CHANGES_REQUESTED with failure details. Do not modify code — only validate and report.",
     );
 
     format!("claude {}", shell_single_quote(&prompt))
@@ -3765,6 +3823,42 @@ pub struct AutoModeDispatchResponse {
     pub surface: String,
     pub worktree_path: String,
     pub branch: String,
+}
+
+#[tauri::command]
+fn caffeinate_start() -> Result<bool, String> {
+    let mut guard = CAFFEINATE_CHILD.lock().map_err(|e| e.to_string())?;
+    if let Some(ref mut child) = *guard {
+        match child.try_wait() {
+            Ok(Some(_)) => { /* exited, will replace below */ }
+            Ok(None) => {
+                log::info!("[caffeinate] Already running (pid {})", child.id());
+                return Ok(false);
+            }
+            Err(_) => { /* assume dead, replace */ }
+        }
+    }
+    let child = new_command("caffeinate")
+        .arg("-i")
+        .spawn()
+        .map_err(|e| format!("Failed to spawn caffeinate: {}", e))?;
+    log::info!("[caffeinate] Started (pid {})", child.id());
+    *guard = Some(child);
+    Ok(true)
+}
+
+#[tauri::command]
+fn caffeinate_stop() -> Result<bool, String> {
+    let mut guard = CAFFEINATE_CHILD.lock().map_err(|e| e.to_string())?;
+    if let Some(mut child) = guard.take() {
+        let pid = child.id();
+        let _ = child.kill();
+        let _ = child.wait();
+        log::info!("[caffeinate] Stopped (pid {})", pid);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 #[tauri::command]
@@ -3871,6 +3965,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     // 3. Check if cmux workspace already exists for this scope.
     let workspace_name = scope.workspace_name.clone();
     let mut workspace_ref: Option<String> = None;
+    let mut reused_workspace = false;
     let list_output = run_cmux(&["list-workspaces".to_string()]);
     if let Ok(ref output) = list_output {
         if output.status.success() {
@@ -3885,6 +3980,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
                     "select-workspace".to_string(),
                     "--workspace".to_string(), existing_ref.clone(),
                 ]);
+                reused_workspace = true;
                 workspace_ref = Some(existing_ref);
             }
         }
@@ -3909,13 +4005,18 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
 
             stdout.split_whitespace()
                 .find(|s| s.starts_with("workspace:"))
-                .unwrap_or("workspace:0")
+                .ok_or_else(|| format!("cmux new-workspace returned no workspace ref: {}", stdout))?
                 .to_string()
         }
     };
 
     // 5. Send Claude command for the selected dispatch scope.
-    let orchestrator_command = build_auto_mode_agent_command(epic_id, issue_id, &request.issue_title, &workspace_ref);
+    let fresh_command = build_auto_mode_agent_command(epic_id, issue_id, &request.issue_title, &workspace_ref);
+    let orchestrator_command = if reused_workspace {
+        build_auto_mode_resume_command(&worktree_dir).unwrap_or(fresh_command)
+    } else {
+        fresh_command
+    };
     let cmux_send_args = vec![
         "send".to_string(),
         "--workspace".to_string(), workspace_ref.clone(),
@@ -3939,6 +4040,455 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         surface,
         worktree_path: worktree_dir,
         branch,
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeDispatchReviewRequest {
+    pub project_path: String,
+    pub issue_id: String,
+    pub issue_title: String,
+    pub task_branch: String,
+    pub executor_commit: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeDispatchReviewResponse {
+    pub surface: String,
+    pub workspace_name: String,
+}
+
+#[tauri::command]
+async fn auto_mode_dispatch_review(request: AutoModeDispatchReviewRequest) -> Result<AutoModeDispatchReviewResponse, String> {
+    let issue_id = &request.issue_id;
+    let epic_id = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
+
+    let project_path_raw = &request.project_path;
+    let git_root_output = new_command("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_path_raw)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to find git root: {}", e))?;
+    let project_path = if git_root_output.status.success() {
+        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
+    } else {
+        project_path_raw.clone()
+    };
+
+    let scope = auto_mode_dispatch_scope(epic_id, issue_id);
+    let worktrees_parent = format!("{}/../worktrees", project_path);
+    let canonical_parent = std::path::Path::new(&worktrees_parent).canonicalize()
+        .map_err(|e| format!("Failed to canonicalize worktrees dir: {}", e))?;
+    let worktree_dir = canonical_parent.join(&scope.worktree_name);
+    if !worktree_dir.exists() {
+        return Err(format!("Task worktree does not exist: {}", worktree_dir.display()));
+    }
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+
+    let review_workspace_name = format!("review:{}", issue_id);
+    log::info!("[auto-mode] [review-gate] Dispatching reviewer for {} in {}", issue_id, worktree_dir_str);
+
+    // Check if review workspace already exists
+    let mut workspace_ref: Option<String> = None;
+    let list_output = run_cmux(&["list-workspaces".to_string()]);
+    if let Ok(ref output) = list_output {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(existing_ref) = stdout.lines()
+                .find(|line| line.contains(&review_workspace_name))
+                .and_then(|line| line.split_whitespace().find(|w| w.starts_with("workspace:")))
+            {
+                let existing_ref = existing_ref.to_string();
+                log::info!("[auto-mode] [review-gate] Reusing review workspace: {}", existing_ref);
+                workspace_ref = Some(existing_ref);
+            }
+        }
+    }
+
+    // Create review workspace if needed
+    let workspace_ref = match workspace_ref {
+        Some(existing) => existing,
+        None => {
+            let cmux_create_args = vec![
+                "new-workspace".to_string(),
+                "--name".to_string(), review_workspace_name.clone(),
+                "--cwd".to_string(), worktree_dir_str.clone(),
+            ];
+            let cmux_output = run_cmux(&cmux_create_args)?;
+            if !cmux_output.status.success() {
+                let stderr = String::from_utf8_lossy(&cmux_output.stderr);
+                return Err(format!("cmux new-workspace failed for review: {}", stderr.trim()));
+            }
+            let stdout = String::from_utf8_lossy(&cmux_output.stdout).trim().to_string();
+            log::info!("[auto-mode] [review-gate] Review workspace created: {}", stdout);
+
+            stdout.split_whitespace()
+                .find(|s| s.starts_with("workspace:"))
+                .ok_or_else(|| format!("cmux new-workspace (review) returned no workspace ref: {}", stdout))?
+                .to_string()
+        }
+    };
+
+    // Send reviewer command
+    let reviewer_command = build_auto_mode_reviewer_command(
+        epic_id,
+        issue_id,
+        &request.issue_title,
+        &request.task_branch,
+        &request.executor_commit,
+        &workspace_ref,
+    );
+    let cmux_send_args = vec![
+        "send".to_string(),
+        "--workspace".to_string(), workspace_ref.clone(),
+        format!("{}\\n", reviewer_command),
+    ];
+    log::info!("[auto-mode] [review-gate] Sending reviewer to {}", workspace_ref);
+    let send_output = run_cmux(&cmux_send_args);
+    match &send_output {
+        Ok(o) if o.status.success() => log::info!("[auto-mode] [review-gate] cmux send succeeded"),
+        Ok(o) => return Err(format!("cmux send failed for review: {}", String::from_utf8_lossy(&o.stderr).trim())),
+        Err(e) => return Err(format!("cmux send error for review: {}", e)),
+    }
+
+    Ok(AutoModeDispatchReviewResponse {
+        surface: workspace_ref,
+        workspace_name: review_workspace_name,
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeMergeApprovedRequest {
+    pub project_path: String,
+    pub issue_id: String,
+    pub task_branch: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeMergeApprovedResponse {
+    pub merged: bool,
+    pub closed: bool,
+    pub worktree_removed: bool,
+}
+
+#[tauri::command]
+async fn auto_mode_merge_approved(request: AutoModeMergeApprovedRequest) -> Result<AutoModeMergeApprovedResponse, String> {
+    let issue_id = &request.issue_id;
+    let task_branch = &request.task_branch;
+
+    let project_path_raw = &request.project_path;
+    let git_root_output = new_command("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_path_raw)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to find git root: {}", e))?;
+    let project_path = if git_root_output.status.success() {
+        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
+    } else {
+        project_path_raw.clone()
+    };
+
+    log::info!("[auto-mode] [merge] Merging approved branch {} for {}", task_branch, issue_id);
+
+    // 1. Merge task branch into current branch (main)
+    let merge_output = new_command("git")
+        .args(["merge", "--no-ff", task_branch, "-m", &format!("merge: {} from branch {}", issue_id, task_branch)])
+        .current_dir(&project_path)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("git merge failed to execute: {}", e))?;
+
+    if !merge_output.status.success() {
+        let stderr = String::from_utf8_lossy(&merge_output.stderr).to_string();
+        // Abort the merge if it conflicted
+        let _ = new_command("git")
+            .args(["merge", "--abort"])
+            .current_dir(&project_path)
+            .env("PATH", get_extended_path())
+            .output();
+        return Err(format!("Merge failed (aborted): {}", stderr.trim()));
+    }
+    log::info!("[auto-mode] [merge] Branch {} merged successfully", task_branch);
+
+    // 2. Close BR issue
+    let epic_id = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
+    let close_result = execute_bd(
+        "close",
+        &[issue_id.to_string(), "--reason".to_string(), format!("Merged {} into main", task_branch)],
+        Some(&project_path),
+    );
+    let closed = close_result.is_ok();
+    if closed {
+        log::info!("[auto-mode] [merge] Issue {} closed", issue_id);
+    } else {
+        log::warn!("[auto-mode] [merge] Failed to close {}: {:?}", issue_id, close_result.err());
+    }
+
+    // 3. Remove worktree
+    let scope = auto_mode_dispatch_scope(epic_id, issue_id);
+    let worktrees_parent = format!("{}/../worktrees", project_path);
+    let worktree_removed = if let Ok(canonical_parent) = std::path::Path::new(&worktrees_parent).canonicalize() {
+        let worktree_path = canonical_parent.join(&scope.worktree_name);
+        if worktree_path.exists() {
+            let remove_output = new_command("git")
+                .args(["worktree", "remove", &worktree_path.to_string_lossy()])
+                .current_dir(&project_path)
+                .env("PATH", get_extended_path())
+                .output();
+            match remove_output {
+                Ok(o) if o.status.success() => {
+                    log::info!("[auto-mode] [merge] Worktree {} removed", scope.worktree_name);
+                    true
+                }
+                _ => {
+                    log::warn!("[auto-mode] [merge] Failed to remove worktree {}", scope.worktree_name);
+                    false
+                }
+            }
+        } else {
+            true
+        }
+    } else {
+        false
+    };
+
+    // 4. Delete task branch (safe — already merged)
+    let _ = new_command("git")
+        .args(["branch", "-d", task_branch])
+        .current_dir(&project_path)
+        .env("PATH", get_extended_path())
+        .output();
+
+    // 5. Flush BR sync
+    let _ = execute_bd("sync", &["--flush-only".to_string()], Some(&project_path));
+
+    Ok(AutoModeMergeApprovedResponse {
+        merged: true,
+        closed,
+        worktree_removed,
+    })
+}
+
+// ============================================================================
+// Auto-Mode Activity Log
+// ============================================================================
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeLogEntry {
+    pub timestamp: String,
+    pub issue_id: String,
+    pub event_type: String,
+    pub detail: String,
+    #[serde(default)]
+    pub surface: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeLogRecord {
+    pub timestamp: String,
+    pub issue_id: String,
+    pub event_type: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn auto_mode_log_path(project_path: &str) -> PathBuf {
+    std::path::Path::new(project_path).join(".beads").join("auto-mode-log.jsonl")
+}
+
+#[tauri::command]
+async fn auto_mode_log_append(project_path: String, entry: AutoModeLogEntry) -> Result<(), String> {
+    let log_path = auto_mode_log_path(&project_path);
+
+    if let Some(parent) = log_path.parent() {
+        if !parent.exists() {
+            return Err("Project .beads/ directory does not exist".to_string());
+        }
+    }
+
+    let record = AutoModeLogRecord {
+        timestamp: entry.timestamp,
+        issue_id: entry.issue_id,
+        event_type: entry.event_type,
+        detail: entry.detail,
+        surface: entry.surface,
+        error: entry.error,
+    };
+
+    let mut line = serde_json::to_string(&record)
+        .map_err(|e| format!("Failed to serialize log entry: {}", e))?;
+    line.push('\n');
+
+    use std::io::Write;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("Failed to open log file: {}", e))?;
+    let mut writer = std::io::BufWriter::new(file);
+    writer.write_all(line.as_bytes())
+        .map_err(|e| format!("Failed to write log entry: {}", e))?;
+    writer.flush()
+        .map_err(|e| format!("Failed to flush log file: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn auto_mode_log_read(project_path: String, limit: Option<usize>) -> Result<Vec<AutoModeLogRecord>, String> {
+    let log_path = auto_mode_log_path(&project_path);
+    if !log_path.exists() {
+        return Ok(vec![]);
+    }
+
+    let content = fs::read_to_string(&log_path)
+        .map_err(|e| format!("Failed to read log file: {}", e))?;
+
+    let mut records: Vec<AutoModeLogRecord> = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+
+    if let Some(limit) = limit {
+        let skip = records.len().saturating_sub(limit);
+        records = records.into_iter().skip(skip).collect();
+    }
+
+    Ok(records)
+}
+
+#[tauri::command]
+async fn auto_mode_log_clear(project_path: String) -> Result<(), String> {
+    let log_path = auto_mode_log_path(&project_path);
+    if log_path.exists() {
+        fs::write(&log_path, "")
+            .map_err(|e| format!("Failed to clear log file: {}", e))?;
+    }
+    Ok(())
+}
+
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeCancelTaskRequest {
+    pub project_path: String,
+    pub issue_id: String,
+    pub surface: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeCancelTaskResponse {
+    pub workspace_closed: bool,
+    pub issue_reset: bool,
+}
+
+#[tauri::command]
+async fn auto_mode_cancel_task(request: AutoModeCancelTaskRequest) -> Result<AutoModeCancelTaskResponse, String> {
+    let issue_id = &request.issue_id;
+
+    let project_path_raw = &request.project_path;
+    let git_root_output = new_command("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_path_raw)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to find git root: {}", e))?;
+    let project_path = if git_root_output.status.success() {
+        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
+    } else {
+        project_path_raw.clone()
+    };
+
+    log::info!("[auto-mode] [cancel] Cancelling task {}", issue_id);
+
+    // 1. Close cmux workspace (try provided surface first, then search by workspace name)
+    let mut workspace_closed = false;
+    let workspace_ref = if let Some(ref surface) = request.surface {
+        Some(surface.clone())
+    } else {
+        let epic_id = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
+        let scope = auto_mode_dispatch_scope(epic_id, issue_id);
+        let list_output = run_cmux(&["list-workspaces".to_string()]);
+        if let Ok(ref output) = list_output {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.lines()
+                    .find(|line| line.contains(&scope.workspace_name) || line.contains(issue_id))
+                    .and_then(|line| line.split_whitespace().find(|w| w.starts_with("workspace:")))
+                    .map(|s| s.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some(ref ws_ref) = workspace_ref {
+        let close_output = run_cmux(&[
+            "close-workspace".to_string(),
+            "--workspace".to_string(),
+            ws_ref.clone(),
+        ]);
+        match close_output {
+            Ok(o) if o.status.success() => {
+                log::info!("[auto-mode] [cancel] Closed workspace {}", ws_ref);
+                workspace_closed = true;
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                log::warn!("[auto-mode] [cancel] Failed to close workspace {}: {}", ws_ref, stderr.trim());
+            }
+            Err(e) => {
+                log::warn!("[auto-mode] [cancel] cmux close error: {}", e);
+            }
+        }
+    } else {
+        log::info!("[auto-mode] [cancel] No workspace ref found for {}, skipping close", issue_id);
+    }
+
+    // 2. Reset issue status back to open
+    let mut issue_reset = false;
+    let reset_result = execute_bd(
+        "update",
+        &[
+            issue_id.to_string(),
+            "--status=open".to_string(),
+            "--assignee=".to_string(),
+        ],
+        Some(&project_path),
+    );
+    match reset_result {
+        Ok(_) => {
+            log::info!("[auto-mode] [cancel] Issue {} reset to open", issue_id);
+            issue_reset = true;
+        }
+        Err(e) => {
+            log::warn!("[auto-mode] [cancel] Failed to reset issue {}: {}", issue_id, e);
+        }
+    }
+
+    // 3. Flush BR sync
+    let _ = execute_bd("sync", &["--flush-only".to_string()], Some(&project_path));
+
+    Ok(AutoModeCancelTaskResponse {
+        workspace_closed,
+        issue_reset,
     })
 }
 
@@ -7413,7 +7963,15 @@ pub fn run() {
             agent_process_status,
             cmux_focus_surface,
             cmux_send_prompt,
+            caffeinate_start,
+            caffeinate_stop,
             auto_mode_dispatch,
+            auto_mode_dispatch_review,
+            auto_mode_merge_approved,
+            auto_mode_log_append,
+            auto_mode_log_read,
+            auto_mode_log_clear,
+            auto_mode_cancel_task,
             terminal_native_renderer_capabilities,
             terminal_open_native_renderer,
             terminal::terminal_create,
@@ -8068,7 +8626,7 @@ prunable gitdir file points to non-existent location
     }
 
     #[test]
-    fn auto_mode_orchestrator_command_launches_claude_for_selected_task() {
+    fn auto_mode_executor_command_references_prompt_file_and_task() {
         let command = build_auto_mode_agent_command(
             "borabr-unf",
             "borabr-unf.7",
@@ -8077,17 +8635,15 @@ prunable gitdir file points to non-existent location
         );
 
         assert!(command.starts_with("claude "));
-        assert!(command.contains("Beads task borabr-unf.7"));
-        assert!(command.contains("epic borabr-unf"));
+        assert!(command.contains(".claude/auto-mode-prompt.md"));
+        assert!(command.contains("borabr-unf.7"));
         assert!(command.contains("br show borabr-unf.7"));
-        assert!(command.contains("cmux:workspace:42"));
-        assert!(command.contains("br update borabr-unf.7 --status in_progress --assignee cmux:workspace:42 --json"));
-        assert!(command.contains("branch `task-borabr-unf.7`"));
-        assert!(!command.contains("br list --json"));
+        assert!(command.contains("br close --actor auto-mode borabr-unf.7"));
+        assert!(command.contains("Do NOT loop"));
     }
 
     #[test]
-    fn auto_mode_orchestrator_command_loops_review_and_merge_for_epic_dispatch() {
+    fn auto_mode_epic_orchestrator_references_prompt_file() {
         let command = build_auto_mode_agent_command(
             "borabr-unf",
             "borabr-unf",
@@ -8096,34 +8652,37 @@ prunable gitdir file points to non-existent location
         );
 
         assert!(command.starts_with("claude "));
-        assert!(command.contains("orchestrator for Beads epic borabr-unf"));
-        assert!(command.contains("br ready --json"));
-        assert!(command.contains("(.issues? // .)[]"));
-        assert!(command.contains("highest-priority ready task"));
-        assert!(command.contains("parallel"));
-        assert!(command.contains("separate Claude executor"));
-        assert!(command.contains("executor-complete comment"));
-        assert!(command.contains("independent Claude reviewer"));
-        assert!(command.contains("tests/type-check/build"));
-        assert!(command.contains("approve/request-changes verdict"));
-        assert!(command.contains("merge the task branch into main"));
-        assert!(command.contains("abort the merge"));
-        assert!(command.contains("remove the task worktree"));
-        assert!(command.contains("delete the task branch when safe"));
-        assert!(command.contains("br sync --flush-only"));
+        assert!(command.contains(".claude/auto-mode-prompt.md"));
+        assert!(command.contains("borabr-unf"));
+        assert!(command.contains("--actor auto-mode"));
+        assert!(command.contains("--json"));
+        assert!(command.contains("claim"));
+        assert!(command.contains("close"));
     }
 
     #[test]
-    fn auto_mode_dispatch_scope_uses_task_names_for_child_work() {
+    fn find_latest_claude_session_id_returns_none_for_nonexistent_path() {
+        let result = find_latest_claude_session_id("/nonexistent/worktree/path");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn build_auto_mode_resume_command_returns_none_for_nonexistent_path() {
+        let result = build_auto_mode_resume_command("/nonexistent/worktree/path");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn auto_mode_dispatch_scope_uses_shared_epic_branch_for_child_work() {
         let task_scope = auto_mode_dispatch_scope("borabr-unf", "borabr-unf.2");
-        assert_eq!(task_scope.branch, "task-borabr-unf.2");
-        assert_eq!(task_scope.worktree_name, "task-borabr-unf.2");
+        assert_eq!(task_scope.branch, "epic/borabr-unf");
+        assert_eq!(task_scope.worktree_name, "epic-borabr-unf");
         assert_eq!(task_scope.workspace_name, "task:borabr-unf.2");
         assert!(!task_scope.is_epic);
 
         let epic_scope = auto_mode_dispatch_scope("borabr-unf", "borabr-unf");
-        assert_eq!(epic_scope.branch, "epic-borabr-unf");
-        assert_eq!(epic_scope.worktree_name, "borabr-unf");
+        assert_eq!(epic_scope.branch, "epic/borabr-unf");
+        assert_eq!(epic_scope.worktree_name, "epic-borabr-unf");
         assert_eq!(epic_scope.workspace_name, "epic:borabr-unf");
         assert!(epic_scope.is_epic);
     }
@@ -8193,5 +8752,49 @@ prunable gitdir file points to non-existent location
 
         assert!(!has_in_progress_non_epic_issue(&[epic]));
         assert!(has_in_progress_non_epic_issue(&[task]));
+    }
+
+    #[test]
+    fn reviewer_command_includes_task_context_and_quality_gates() {
+        let command = build_auto_mode_reviewer_command(
+            "borabr-unf",
+            "borabr-unf.4",
+            "review agent gate",
+            "task-borabr-unf.4",
+            "abc1234",
+            "workspace:50",
+        );
+
+        assert!(command.starts_with("claude "));
+        assert!(command.contains("independent reviewer"));
+        assert!(command.contains("Beads task borabr-unf.4"));
+        assert!(command.contains("epic borabr-unf"));
+        assert!(command.contains("fresh context"));
+        assert!(command.contains("no bias"));
+        assert!(command.contains("Branch: `task-borabr-unf.4`"));
+        assert!(command.contains("executor commit: abc1234"));
+        assert!(command.contains("br show borabr-unf.4"));
+        assert!(command.contains("git diff master...task-borabr-unf.4"));
+        assert!(command.contains("pnpm test"));
+        assert!(command.contains("vue-tsc --noEmit"));
+        assert!(command.contains("br comments add --actor auto-mode borabr-unf.4"));
+        assert!(command.contains("REVIEW_VERDICT"));
+        assert!(command.contains("APPROVED"));
+        assert!(command.contains("CHANGES_REQUESTED"));
+        assert!(command.contains("Do not modify code"));
+    }
+
+    #[test]
+    fn reviewer_command_uses_correct_assignee_format() {
+        let command = build_auto_mode_reviewer_command(
+            "epic-1",
+            "epic-1.3",
+            "some task",
+            "task-epic-1.3",
+            "def5678",
+            "workspace:99",
+        );
+
+        assert!(command.contains("cmux:workspace:99"));
     }
 }
