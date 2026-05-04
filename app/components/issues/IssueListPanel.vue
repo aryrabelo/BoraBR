@@ -32,6 +32,7 @@ defineProps<{
   autoModeEnabled?: boolean
   autoModeDispatchingIds?: Set<string>
   autoModeRunningIds?: Set<string>
+  autoModeFailedTasks?: Map<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -125,6 +126,7 @@ const handleSort = (field: string | null, direction: 'asc' | 'desc') => {
       :auto-mode-enabled="autoModeEnabled"
       :auto-mode-dispatching-ids="autoModeDispatchingIds"
       :auto-mode-running-ids="autoModeRunningIds"
+      :auto-mode-failed-tasks="autoModeFailedTasks"
       @select="emit('select', $event)"
       @edit="emit('edit', $event)"
       @deselect="emit('deselect')"

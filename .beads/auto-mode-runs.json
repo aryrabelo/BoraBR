@@ -10,11 +10,11 @@
     "provider": "gitWorktree",
     "branch": "epic/borabr-tnf",
     "worktreePath": "/Users/aryrabelo/Sites/worktrees/epic-borabr-tnf",
-    "phase": "executing",
-    "lastEvent": "Executor dispatched",
+    "phase": "executor_complete",
+    "lastEvent": "Executor already complete",
     "error": null,
     "attempts": 1,
     "surface": "workspace:53",
-    "updatedAt": "1777913251549"
+    "updatedAt": "1777914369026"
   }
 ]
