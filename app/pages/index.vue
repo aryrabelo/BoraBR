@@ -71,6 +71,7 @@ import {
   buildActionCenterProjectIdleState,
   buildActionCenterReconciledActions,
   buildActionCenterRunActionItem,
+  compareActionCenterRunItems,
   normalizeActionCenterProjectPath,
   pickVisibleActionCenterItems,
   type ActionCenterAutoModeRunItem,
@@ -576,15 +577,7 @@ const actionCenterItems = computed<ActionCenterItem[]>(() => {
       const snoozedUntil = snoozedActionCenterItems.value[item.actionId]
       return !snoozedUntil || snoozedUntil <= actionCenterNow.value
     })
-    .sort((a, b) => {
-      if (a.actionTimestamp !== b.actionTimestamp) {
-        return a.actionTimestamp - b.actionTimestamp
-      }
-      if (actionSourceOrder[a.actionSource] !== actionSourceOrder[b.actionSource]) {
-        return actionSourceOrder[a.actionSource] - actionSourceOrder[b.actionSource]
-      }
-      return a.id.localeCompare(b.id)
-    })
+    .sort(compareActionCenterItems)
 
   return pickVisibleActionCenterItems(items, ACTION_CENTER_VISIBLE_LIMIT)
 })
@@ -604,6 +597,20 @@ const autoModeRunActionLabel: Record<ActionCenterAutoModeRunNextAction, string> 
 const getAutoModeRunNextLabel = (item: ActionCenterAutoModeRunItem) => {
   const nextAction = item.nextActions[0]
   return nextAction ? autoModeRunActionLabel[nextAction] : 'Continue'
+}
+
+const compareActionCenterItems = (a: ActionCenterItem, b: ActionCenterItem) => {
+  if (actionSourceOrder[a.actionSource] !== actionSourceOrder[b.actionSource]) {
+    return actionSourceOrder[a.actionSource] - actionSourceOrder[b.actionSource]
+  }
+
+  if (a.actionKind === 'auto_mode_run' && b.actionKind === 'auto_mode_run') {
+    return compareActionCenterRunItems(a, b)
+  } else if (a.actionTimestamp !== b.actionTimestamp) {
+    return a.actionTimestamp - b.actionTimestamp
+  }
+
+  return a.id.localeCompare(b.id)
 }
 
 const getActionCenterPrimaryLabel = (item: ActionCenterItem) => {

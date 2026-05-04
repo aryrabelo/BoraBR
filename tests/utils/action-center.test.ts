@@ -7,6 +7,8 @@ import {
   buildActionCenterProjectActionState,
   buildActionCenterProjectIdleState,
   buildActionCenterRunActionItem,
+  compareActionCenterRunItems,
+  getActionCenterRunPhasePriority,
   getActionCenterRunNextActions,
   buildActionCenterReconciledActions,
   countActionCenterInProgressIssues,
@@ -82,6 +84,7 @@ describe('Action Center project state', () => {
 
   it('builds auto-mode Action Center items from durable run state', () => {
     const item = buildActionCenterRunActionItem({
+      runId: 'borabr-ua3-1-123',
       projectPath: '/Users/aryrabelo/Sites/entrc-backend',
       projectName: 'entrc-backend',
       baseBranch: 'main',
@@ -99,6 +102,7 @@ describe('Action Center project state', () => {
 
     expect(item).toMatchObject({
       actionKind: 'auto_mode_run',
+      actionId: 'auto-mode:/Users/aryrabelo/Sites/entrc-backend:ENG-559:borabr-ua3-1-123:executing',
       actionSource: 'auto_mode',
       actionSourceLabel: 'Auto-Mode',
       id: 'ENG-559',
@@ -115,6 +119,89 @@ describe('Action Center project state', () => {
     expect(item.description).toContain('Base branch: main')
     expect(item.description).toContain('Provider: wt')
     expect(item.description).toContain('Worktree: /Users/aryrabelo/Sites/entrc-backend/.worktrees/ENG-559')
+  })
+
+  it('keys auto-mode actions by run revision and phase', () => {
+    const baseRun = {
+      runId: 'borabr-tnf-1-123',
+      projectPath: '/repo',
+      issueId: 'borabr-tnf.1',
+      issueTitle: 'Smoke task',
+      provider: 'gitWorktree' as const,
+      branch: 'epic/borabr-tnf',
+      worktreePath: '/worktree',
+      attempts: 1,
+      updatedAt: '2026-05-04T19:00:00.000Z',
+    }
+
+    const executorItem = buildActionCenterRunActionItem({
+      ...baseRun,
+      phase: 'executor_complete',
+    })
+    const approvedItem = buildActionCenterRunActionItem({
+      ...baseRun,
+      phase: 'review_approved',
+    })
+
+    expect(executorItem.actionId).not.toBe(approvedItem.actionId)
+  })
+
+  it('parses numeric durable run timestamps for Action Center ordering', () => {
+    const item = buildActionCenterRunActionItem({
+      runId: 'borabr-tnf-1-123',
+      projectPath: '/repo',
+      issueId: 'borabr-tnf.1',
+      issueTitle: 'Smoke task',
+      provider: 'gitWorktree',
+      branch: 'epic/borabr-tnf',
+      worktreePath: '/worktree',
+      phase: 'executor_complete',
+      attempts: 1,
+      updatedAt: '1777924341093',
+    })
+
+    expect(item.actionTimestamp).toBe(1777924341093)
+  })
+
+  it('prioritizes auto-mode handoff phases over cleanup-only phases', () => {
+    expect(getActionCenterRunPhasePriority({ phase: 'failed' }))
+      .toBeLessThan(getActionCenterRunPhasePriority({ phase: 'executor_complete' }))
+    expect(getActionCenterRunPhasePriority({ phase: 'executor_complete' }))
+      .toBeLessThan(getActionCenterRunPhasePriority({ phase: 'executing' }))
+    expect(getActionCenterRunPhasePriority({ phase: 'review_approved' }))
+      .toBeLessThan(getActionCenterRunPhasePriority({ phase: 'done' }))
+    expect(getActionCenterRunPhasePriority({ phase: 'review_changes_requested' }))
+      .toBeLessThan(getActionCenterRunPhasePriority({ phase: 'cancelled' }))
+  })
+
+  it('sorts current auto-mode handoffs before stale cleanup runs', () => {
+    const cleanupRun = buildActionCenterRunActionItem({
+      runId: 'old-run',
+      projectPath: '/repo',
+      issueId: 'borabr-old.1',
+      issueTitle: 'Old cleanup',
+      provider: 'gitWorktree',
+      branch: 'epic/old',
+      worktreePath: '/worktree/old',
+      phase: 'cancelled',
+      attempts: 1,
+      updatedAt: '1777929999999',
+    })
+    const handoffRun = buildActionCenterRunActionItem({
+      runId: 'current-run',
+      projectPath: '/repo',
+      issueId: 'borabr-tnf.1',
+      issueTitle: 'Current handoff',
+      provider: 'gitWorktree',
+      branch: 'epic/borabr-tnf',
+      worktreePath: '/worktree/current',
+      phase: 'executor_complete',
+      attempts: 1,
+      updatedAt: '1777924341093',
+    })
+
+    expect([cleanupRun, handoffRun].sort(compareActionCenterRunItems).map(item => item.id))
+      .toEqual(['borabr-tnf.1', 'borabr-old.1'])
   })
 
   it('builds the prompt used by Action Center issue actions', () => {

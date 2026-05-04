@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Issue } from '~/types/issue'
 import {
+  getAutoModeTaskStatusForRunPhase,
   getAutoModeLifecycleAction,
   hasAutoModeInProgressTask,
   pickAutoModeIssue,
@@ -67,6 +68,28 @@ describe('hasAutoModeInProgressTask', () => {
     expect(hasAutoModeInProgressTask([
       makeIssue({ id: 'borabr-unf.1', type: 'task', status: 'in_progress' }),
     ])).toBe(true)
+  })
+})
+
+describe('getAutoModeTaskStatusForRunPhase', () => {
+  it('keeps active execution phases marked as running locally', () => {
+    expect(getAutoModeTaskStatusForRunPhase('workspace_ready')).toBe('running')
+    expect(getAutoModeTaskStatusForRunPhase('executing')).toBe('running')
+  })
+
+  it('clears the dispatched badge once the controller reaches handoff or terminal phases', () => {
+    expect(getAutoModeTaskStatusForRunPhase('executor_complete')).toBe('done')
+    expect(getAutoModeTaskStatusForRunPhase('review_approved')).toBe('done')
+    expect(getAutoModeTaskStatusForRunPhase('review_changes_requested')).toBe('done')
+    expect(getAutoModeTaskStatusForRunPhase('done')).toBe('done')
+    expect(getAutoModeTaskStatusForRunPhase('cancelled')).toBe('done')
+  })
+
+  it('maps review, PR, and failure phases to their visible local status', () => {
+    expect(getAutoModeTaskStatusForRunPhase('reviewing')).toBe('reviewing')
+    expect(getAutoModeTaskStatusForRunPhase('creating_pr')).toBe('merging')
+    expect(getAutoModeTaskStatusForRunPhase('failed')).toBe('failed')
+    expect(getAutoModeTaskStatusForRunPhase('unknown')).toBeNull()
   })
 })
 

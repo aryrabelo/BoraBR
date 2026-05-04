@@ -42,6 +42,16 @@ export type AutoModeLifecycleAction =
   | { type: 'sync_controller', reason: string }
   | null
 
+interface AutoModeRunSnapshot {
+  issueId: string
+  phase: string
+  error?: string | null
+}
+
+interface AutoModeTickResponse {
+  runs: AutoModeRunSnapshot[]
+}
+
 export interface UseAutoModeOptions {
   refreshReady?: () => Promise<Issue[] | null | void>
   readyPollIntervalMs?: number
@@ -109,6 +119,28 @@ export function getAutoModeLifecycleAction(task: AutoModeTask, issue: Issue): Au
   return null
 }
 
+export function getAutoModeTaskStatusForRunPhase(phase: string): AutoModeTask['status'] | null {
+  switch (phase) {
+    case 'workspace_ready':
+    case 'executing':
+      return 'running'
+    case 'reviewing':
+      return 'reviewing'
+    case 'creating_pr':
+      return 'merging'
+    case 'failed':
+      return 'failed'
+    case 'executor_complete':
+    case 'review_approved':
+    case 'review_changes_requested':
+    case 'done':
+    case 'cancelled':
+      return 'done'
+    default:
+      return null
+  }
+}
+
 export function pickAutoModeIssue(
   readyIssues: Issue[],
   activeTasks: ReadonlyMap<string, AutoModeTask> = new Map(),
@@ -149,11 +181,37 @@ export function useAutoMode(
 
   const activeTaskList = computed(() => Array.from(activeTaskMap.value.values()))
 
-  async function tickAutoModeController(reason: string) {
+  function syncActiveTasksWithDurableRuns(runs: AutoModeRunSnapshot[]) {
+    let changed = false
+    const next = new Map(activeTaskMap.value)
+
+    for (const task of next.values()) {
+      const run = runs.find(candidate => candidate.issueId === task.issueId)
+      if (!run) continue
+
+      const status = getAutoModeTaskStatusForRunPhase(run.phase)
+      if (!status) continue
+
+      const error = status === 'failed' ? (run.error || task.error) : task.error
+      if (task.status !== status || task.error !== error) {
+        next.set(task.issueId, { ...task, status, error })
+        changed = true
+      }
+    }
+
+    if (changed) {
+      activeTaskMap.value = next
+    }
+  }
+
+  async function tickAutoModeController(reason: string): Promise<AutoModeRunSnapshot[] | null> {
     try {
-      await invoke('auto_mode_tick', { projectPath: projectPath.value })
+      const result = await invoke<AutoModeTickResponse>('auto_mode_tick', { projectPath: projectPath.value })
+      syncActiveTasksWithDurableRuns(result.runs)
+      return result.runs
     } catch (e) {
       logFrontend('warn', `[auto-mode] Controller tick failed during ${reason}: ${e}`)
+      return null
     }
   }
 

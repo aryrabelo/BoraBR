@@ -135,12 +135,57 @@ export function getActionCenterRunNextActions(
   }
 }
 
+export function getActionCenterRunPhasePriority(
+  run: Pick<ActionCenterAutoModeRunState, 'phase'>,
+): number {
+  switch (run.phase) {
+    case 'failed':
+      return 0
+    case 'executor_complete':
+    case 'review_approved':
+    case 'review_changes_requested':
+      return 1
+    case 'workspace_ready':
+    case 'executing':
+    case 'reviewing':
+    case 'creating_pr':
+      return 2
+    case 'done':
+    case 'cancelled':
+      return 3
+  }
+}
+
+export function compareActionCenterRunItems(
+  a: Pick<ActionCenterAutoModeRunItem, 'phase' | 'actionTimestamp' | 'id'>,
+  b: Pick<ActionCenterAutoModeRunItem, 'phase' | 'actionTimestamp' | 'id'>,
+): number {
+  const priorityDelta = getActionCenterRunPhasePriority(a) - getActionCenterRunPhasePriority(b)
+  if (priorityDelta !== 0) return priorityDelta
+
+  if (a.actionTimestamp !== b.actionTimestamp) {
+    return b.actionTimestamp - a.actionTimestamp
+  }
+
+  return a.id.localeCompare(b.id)
+}
+
+function parseActionCenterRunTimestamp(value?: string | null): number {
+  const timestamp = Date.parse(value || '')
+  if (!Number.isNaN(timestamp)) return timestamp
+
+  const numericTimestamp = Number(value)
+  if (Number.isFinite(numericTimestamp)) return numericTimestamp
+
+  return Date.now()
+}
+
 export function buildActionCenterRunActionItem(
   run: ActionCenterAutoModeRunState,
 ): ActionCenterAutoModeRunItem {
-  const updatedAt = Date.parse(run.updatedAt || '')
-  const actionTimestamp = Number.isNaN(updatedAt) ? Date.now() : updatedAt
+  const actionTimestamp = parseActionCenterRunTimestamp(run.updatedAt)
   const projectName = run.projectName || run.projectPath.split('/').filter(Boolean).at(-1) || 'Project'
+  const actionRevision = run.runId || run.updatedAt || run.phase
   const descriptionParts = [
     `Project root: ${run.projectPath}`,
     run.baseBranch ? `Base branch: ${run.baseBranch}` : '',
@@ -157,7 +202,7 @@ export function buildActionCenterRunActionItem(
   return {
     ...run,
     actionKind: 'auto_mode_run',
-    actionId: `auto-mode:${normalizeActionCenterProjectPath(run.projectPath)}:${run.issueId}`,
+    actionId: `auto-mode:${normalizeActionCenterProjectPath(run.projectPath)}:${run.issueId}:${actionRevision}:${run.phase}`,
     id: run.issueId,
     title: `${run.issueId}: ${run.issueTitle}`,
     description: descriptionParts.join(' | '),
