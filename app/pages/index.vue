@@ -123,6 +123,13 @@ const { enabled: autoModeEnabled, activeTaskList: autoModeTasks, isDispatching: 
 })
 const autoModeDispatchingIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'dispatching').map(t => t.issueId)))
 const autoModeRunningIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'running').map(t => t.issueId)))
+const autoModeFailedTasks = computed(() => {
+  const map = new Map<string, string>()
+  for (const t of autoModeTasks.value) {
+    if (t.status === 'failed' && t.error) map.set(t.issueId, t.error)
+  }
+  return map
+})
 const { showDebugPanel, showSettingsDialog } = useAppMenu()
 const showAutoModeLog = ref(false)
 const { needsRepair, affectedProject, isRepairing, repairError, repairProgress, repair: repairDatabase, repairAll, dismiss: dismissRepair } = useRepairDatabase()
@@ -1706,6 +1713,7 @@ watch(
               :auto-mode-enabled="autoModeEnabled"
               :auto-mode-dispatching-ids="autoModeDispatchingIds"
               :auto-mode-running-ids="autoModeRunningIds"
+              :auto-mode-failed-tasks="autoModeFailedTasks"
               @add="handleAddIssue"
               @delete="handleDeleteIssue"
               @toggle-multi-select="toggleMultiSelect"
@@ -2061,6 +2069,7 @@ watch(
           :auto-mode-enabled="autoModeEnabled"
           :auto-mode-dispatching-ids="autoModeDispatchingIds"
           :auto-mode-running-ids="autoModeRunningIds"
+          :auto-mode-failed-tasks="autoModeFailedTasks"
           @add="handleAddIssue"
           @delete="handleDeleteIssue"
           @toggle-multi-select="toggleMultiSelect"
