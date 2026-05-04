@@ -3951,7 +3951,7 @@ fn auto_mode_run_phase_after_issue_event(
         }
     }
 
-    if phase == "reviewing" {
+    if phase == "reviewing" || phase == "executor_complete" {
         if let Some(verdict) = comments
             .iter()
             .rev()
@@ -4651,101 +4651,8 @@ pub struct AutoModeMergeApprovedResponse {
 
 #[tauri::command]
 async fn auto_mode_merge_approved(request: AutoModeMergeApprovedRequest) -> Result<AutoModeMergeApprovedResponse, String> {
-    let issue_id = &request.issue_id;
-    let task_branch = &request.task_branch;
-
-    let project_path_raw = &request.project_path;
-    let git_root_output = new_command("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(project_path_raw)
-        .env("PATH", get_extended_path())
-        .output()
-        .map_err(|e| format!("Failed to find git root: {}", e))?;
-    let project_path = if git_root_output.status.success() {
-        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
-    } else {
-        project_path_raw.clone()
-    };
-
-    log::info!("[auto-mode] [merge] Merging approved branch {} for {}", task_branch, issue_id);
-
-    // 1. Merge task branch into current branch (main)
-    let merge_output = new_command("git")
-        .args(["merge", "--no-ff", task_branch, "-m", &format!("merge: {} from branch {}", issue_id, task_branch)])
-        .current_dir(&project_path)
-        .env("PATH", get_extended_path())
-        .output()
-        .map_err(|e| format!("git merge failed to execute: {}", e))?;
-
-    if !merge_output.status.success() {
-        let stderr = String::from_utf8_lossy(&merge_output.stderr).to_string();
-        // Abort the merge if it conflicted
-        let _ = new_command("git")
-            .args(["merge", "--abort"])
-            .current_dir(&project_path)
-            .env("PATH", get_extended_path())
-            .output();
-        return Err(format!("Merge failed (aborted): {}", stderr.trim()));
-    }
-    log::info!("[auto-mode] [merge] Branch {} merged successfully", task_branch);
-
-    // 2. Close BR issue
-    let epic_id = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
-    let close_result = execute_bd(
-        "close",
-        &[issue_id.to_string(), "--reason".to_string(), format!("Merged {} into main", task_branch)],
-        Some(&project_path),
-    );
-    let closed = close_result.is_ok();
-    if closed {
-        log::info!("[auto-mode] [merge] Issue {} closed", issue_id);
-    } else {
-        log::warn!("[auto-mode] [merge] Failed to close {}: {:?}", issue_id, close_result.err());
-    }
-
-    // 3. Remove worktree
-    let scope = auto_mode_dispatch_scope(epic_id, issue_id);
-    let worktrees_parent = format!("{}/../worktrees", project_path);
-    let worktree_removed = if let Ok(canonical_parent) = std::path::Path::new(&worktrees_parent).canonicalize() {
-        let worktree_path = canonical_parent.join(&scope.worktree_name);
-        if worktree_path.exists() {
-            let remove_output = new_command("git")
-                .args(["worktree", "remove", &worktree_path.to_string_lossy()])
-                .current_dir(&project_path)
-                .env("PATH", get_extended_path())
-                .output();
-            match remove_output {
-                Ok(o) if o.status.success() => {
-                    log::info!("[auto-mode] [merge] Worktree {} removed", scope.worktree_name);
-                    true
-                }
-                _ => {
-                    log::warn!("[auto-mode] [merge] Failed to remove worktree {}", scope.worktree_name);
-                    false
-                }
-            }
-        } else {
-            true
-        }
-    } else {
-        false
-    };
-
-    // 4. Delete task branch (safe — already merged)
-    let _ = new_command("git")
-        .args(["branch", "-d", task_branch])
-        .current_dir(&project_path)
-        .env("PATH", get_extended_path())
-        .output();
-
-    // 5. Flush BR sync
-    let _ = execute_bd("sync", &["--flush-only".to_string()], Some(&project_path));
-
-    Ok(AutoModeMergeApprovedResponse {
-        merged: true,
-        closed,
-        worktree_removed,
-    })
+    let _ = request;
+    Err("auto_mode_merge_approved is disabled; use Action Center Create PR/UPR via auto_mode_run_create_pr".to_string())
 }
 
 // ============================================================================
@@ -9510,6 +9417,10 @@ prunable gitdir file points to non-existent location
         let approved = "REVIEW_VERDICT: APPROVED\nSummary: ok";
         assert_eq!(
             auto_mode_run_phase_after_issue_event("reviewing", &[approved.to_string()]),
+            ("review_approved".to_string(), Some("Review approved".to_string()), None),
+        );
+        assert_eq!(
+            auto_mode_run_phase_after_issue_event("executor_complete", &[approved.to_string()]),
             ("review_approved".to_string(), Some("Review approved".to_string()), None),
         );
 

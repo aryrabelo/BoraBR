@@ -26,3 +26,24 @@
 {"timestamp":"2026-05-04T18:11:09.768Z","issueId":"borabr-h02.4","eventType":"dispatch_failed","detail":"Dispatch failed","error":"{\n  \"error\": {\n    \"code\": \"VALIDATION_FAILED\",\n    \"message\": \"Validation failed: workflow: workflow gate failed: workflow:bug-investigation steps_incomplete; next: br ready --parent borabr-h02.4 --json\",\n    \"hint\": null,\n    \"retryable\": true,\n    \"context\": {\n      \"field\": \"workflow\",\n      \"reason\": \"workflow gate failed: workflow:bug-investigation steps_incomplete; next: br ready --parent borabr-h02.4 --json\"\n    }\n  }\n}\n"}
 {"timestamp":"2026-05-04T18:11:09.769Z","issueId":"borabr-h02.4.2","eventType":"dispatch_start","detail":"Dispatching: Run five whys"}
 {"timestamp":"2026-05-04T18:11:10.757Z","issueId":"borabr-h02.4.2","eventType":"dispatch_success","detail":"Running on workspace:60, branch epic/borabr-h02.4","surface":"workspace:60"}
+{"timestamp":"2026-05-04T18:21:00.926Z","issueId":"-","eventType":"enabled","detail":"Auto-mode enabled for /Users/aryrabelo/Sites/beads-task-issue-tracker"}
+{"timestamp":"2026-05-04T18:21:01.885Z","issueId":"-","eventType":"disabled","detail":"Auto-mode disabled"}
+{"timestamp":"2026-05-04T18:21:02.665Z","issueId":"-","eventType":"enabled","detail":"Auto-mode enabled for /Users/aryrabelo/Sites/beads-task-issue-tracker"}
+{"timestamp":"2026-05-04T18:21:17.608Z","issueId":"-","eventType":"enabled","detail":"Auto-mode enabled for /Users/aryrabelo/Sites/beads-task-issue-tracker"}
+{"timestamp":"2026-05-04T18:22:13.783Z","issueId":"borabr-tnf.1","eventType":"dispatch_start","detail":"Dispatching: Polish app header typography for auto-mode smoke-test"}
+{"timestamp":"2026-05-04T18:22:13.959Z","issueId":"borabr-tnf.1","eventType":"dispatch_success","detail":"Running on , branch epic/borabr-tnf","surface":""}
+{"timestamp":"2026-05-04T18:22:41.560Z","issueId":"borabr-tnf.1","eventType":"dispatch_start","detail":"Dispatching: Polish app header typography for auto-mode smoke-test"}
+{"timestamp":"2026-05-04T18:22:41.702Z","issueId":"borabr-tnf.1","eventType":"dispatch_success","detail":"Running on , branch epic/borabr-tnf","surface":""}
+{"timestamp":"2026-05-04T18:22:53.600Z","issueId":"borabr-tnf.1","eventType":"dispatch_start","detail":"Dispatching: Polish app header typography for auto-mode smoke-test"}
+{"timestamp":"2026-05-04T18:22:53.695Z","issueId":"borabr-tnf.1","eventType":"dispatch_success","detail":"Running on , branch epic/borabr-tnf","surface":""}
+{"timestamp":"2026-05-04T18:23:23.532Z","issueId":"borabr-tnf.1","eventType":"review_start","detail":"Review dispatched for commit 0d2fcb0"}
+{"timestamp":"2026-05-04T18:23:24.150Z","issueId":"borabr-tnf.1","eventType":"review_start","detail":"Reviewer running on workspace:61","surface":"workspace:61"}
+{"timestamp":"2026-05-04T18:24:10.212Z","issueId":"borabr-tnf.1","eventType":"merge_start","detail":"Merge started"}
+{"timestamp":"2026-05-04T18:24:10.597Z","issueId":"borabr-tnf.1","eventType":"merge_success","detail":"Merged=true closed=true worktree_removed=false"}
+{"timestamp":"2026-05-04T18:26:38.929Z","issueId":"-","eventType":"enabled","detail":"Auto-mode enabled for /Users/aryrabelo/Sites/beads-task-issue-tracker"}
+{"timestamp":"2026-05-04T18:29:20.504Z","issueId":"borabr-h02.5","eventType":"dispatch_start","detail":"Dispatching: Disable legacy auto-mode merge/close path"}
+{"timestamp":"2026-05-04T18:29:21.377Z","issueId":"borabr-h02.5","eventType":"dispatch_failed","detail":"Dispatch failed","error":"{\n  \"error\": {\n    \"code\": \"VALIDATION_FAILED\",\n    \"message\": \"Validation failed: workflow: workflow gate failed: workflow:bug-investigation steps_missing; next: br workflow steps borabr-h02.5 --apply\",\n    \"hint\": null,\n    \"retryable\": true,\n    \"context\": {\n      \"field\": \"workflow\",\n      \"reason\": \"workflow gate failed: workflow:bug-investigation steps_missing; next: br workflow steps borabr-h02.5 --apply\"\n    }\n  }\n}\n"}
+{"timestamp":"2026-05-04T18:29:34.131Z","issueId":"borabr-h02.5.1","eventType":"dispatch_start","detail":"Dispatching: Reproduce bug"}
+{"timestamp":"2026-05-04T18:29:35.350Z","issueId":"borabr-h02.5.1","eventType":"dispatch_success","detail":"Running on workspace:63, branch epic/borabr-h02.5","surface":"workspace:63"}
+{"timestamp":"2026-05-04T18:34:33.460Z","issueId":"borabr-h02.5","eventType":"dispatch_start","detail":"Dispatching: Disable legacy auto-mode merge/close path"}
+{"timestamp":"2026-05-04T18:34:33.612Z","issueId":"borabr-h02.5","eventType":"dispatch_success","detail":"Running on , branch epic/borabr-h02.5","surface":""}

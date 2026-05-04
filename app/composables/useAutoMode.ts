@@ -27,31 +27,6 @@ export interface AutoModeDispatchResponse {
   branch: string
 }
 
-export interface AutoModeDispatchReviewRequest {
-  projectPath: string
-  issueId: string
-  issueTitle: string
-  taskBranch: string
-  executorCommit: string
-}
-
-export interface AutoModeDispatchReviewResponse {
-  surface: string
-  workspaceName: string
-}
-
-export interface AutoModeMergeApprovedRequest {
-  projectPath: string
-  issueId: string
-  taskBranch: string
-}
-
-export interface AutoModeMergeApprovedResponse {
-  merged: boolean
-  closed: boolean
-  worktreeRemoved: boolean
-}
-
 export interface AutoModeCancelTaskRequest {
   projectPath: string
   issueId: string
@@ -64,9 +39,7 @@ export interface AutoModeCancelTaskResponse {
 }
 
 export type AutoModeLifecycleAction =
-  | { type: 'dispatch_review', commit: string }
-  | { type: 'merge_approved' }
-  | { type: 'review_failed', error: string }
+  | { type: 'sync_controller', reason: string }
   | null
 
 export interface UseAutoModeOptions {
@@ -123,16 +96,14 @@ export function getAutoModeLifecycleAction(task: AutoModeTask, issue: Issue): Au
   if (task.status === 'running') {
     const executorComplete = latestMatchingComment(issue, content => content.includes('EXECUTOR_COMPLETE'))
     const commit = executorComplete ? extractExecutorCommit(executorComplete) : null
-    return commit ? { type: 'dispatch_review', commit } : null
+    return commit ? { type: 'sync_controller', reason: 'Executor complete' } : null
   }
 
   if (task.status === 'reviewing') {
     const verdict = latestMatchingComment(issue, content => content.includes('REVIEW_VERDICT:'))
     if (!verdict) return null
-    if (/REVIEW_VERDICT:\s*APPROVED/i.test(verdict)) return { type: 'merge_approved' }
-    if (/REVIEW_VERDICT:\s*CHANGES_REQUESTED/i.test(verdict)) {
-      return { type: 'review_failed', error: verdict }
-    }
+    if (/REVIEW_VERDICT:\s*APPROVED/i.test(verdict)) return { type: 'sync_controller', reason: 'Review approved' }
+    if (/REVIEW_VERDICT:\s*CHANGES_REQUESTED/i.test(verdict)) return { type: 'sync_controller', reason: 'Review requested changes' }
   }
 
   return null
@@ -178,8 +149,15 @@ export function useAutoMode(
 
   const activeTaskList = computed(() => Array.from(activeTaskMap.value.values()))
 
+  async function tickAutoModeController(reason: string) {
+    try {
+      await invoke('auto_mode_tick', { projectPath: projectPath.value })
+    } catch (e) {
+      logFrontend('warn', `[auto-mode] Controller tick failed during ${reason}: ${e}`)
+    }
+  }
+
   async function refreshReadyForAutoMode() {
-    if (!options.refreshReady) return
     if (!enabled.value) return
     if (!projectPath.value) return
     if (!isTauri()) return
@@ -187,7 +165,8 @@ export function useAutoMode(
 
     isRefreshingReady = true
     try {
-      await options.refreshReady()
+      await tickAutoModeController('ready refresh')
+      await options.refreshReady?.()
     } catch (e) {
       logFrontend('warn', `[auto-mode] Ready refresh failed: ${e}`)
     } finally {
@@ -203,7 +182,7 @@ export function useAutoMode(
   }
 
   function startReadyPolling() {
-    if (!options.refreshReady || readyPollTimer) return
+    if (readyPollTimer) return
 
     refreshReadyForAutoMode()
     readyPollTimer = setInterval(
@@ -288,68 +267,22 @@ export function useAutoMode(
     }
   }
 
-  async function dispatchReview(issueId: string, executorCommit: string) {
+  async function syncController(issueId: string, reason: string) {
     const task = activeTaskMap.value.get(issueId)
-    if (!task || task.status !== 'running') return
-    if (!executorCommit) return
-
-    task.status = 'reviewing'
-    activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
+    if (!task) return
 
     try {
-      logFrontend('info', `[auto-mode] Dispatching reviewer for ${issueId} (commit ${executorCommit})`)
-      logEvent('review_start', issueId, `Review dispatched for commit ${executorCommit}`)
-
-      const result = await invoke<AutoModeDispatchReviewResponse>('auto_mode_dispatch_review', {
-        request: {
-          projectPath: projectPath.value,
-          issueId,
-          issueTitle: task.title,
-          taskBranch: task.worktreeBranch ?? `task-${issueId}`,
-          executorCommit,
-        } satisfies AutoModeDispatchReviewRequest,
-      })
-
-      logFrontend('info', `[auto-mode] Reviewer running on ${result.surface} for ${issueId}`)
-      logEvent('review_start', issueId, `Reviewer running on ${result.surface}`, { surface: result.surface })
-    } catch (e) {
-      task.status = 'failed'
-      task.error = `Review dispatch failed: ${e}`
-      activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
-      logFrontend('error', `[auto-mode] Failed to dispatch reviewer for ${issueId}: ${e}`)
-      logEvent('review_failed', issueId, `Review dispatch failed`, { error: String(e) })
-    }
-  }
-
-  async function mergeApproved(issueId: string) {
-    const task = activeTaskMap.value.get(issueId)
-    if (!task || task.status !== 'reviewing') return
-
-    task.status = 'merging'
-    activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
-
-    try {
-      logFrontend('info', `[auto-mode] Merging approved task ${issueId}`)
-      logEvent('merge_start', issueId, `Merge started`)
-
-      const result = await invoke<AutoModeMergeApprovedResponse>('auto_mode_merge_approved', {
-        request: {
-          projectPath: projectPath.value,
-          issueId,
-          taskBranch: task.worktreeBranch ?? `task-${issueId}`,
-        } satisfies AutoModeMergeApprovedRequest,
-      })
-
+      logFrontend('info', `[auto-mode] Syncing controller for ${issueId}: ${reason}`)
+      await tickAutoModeController(reason)
       task.status = 'done'
       activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
-      logFrontend('info', `[auto-mode] Task ${issueId} merged=${result.merged} closed=${result.closed} worktree_removed=${result.worktreeRemoved}`)
-      logEvent('merge_success', issueId, `Merged=${result.merged} closed=${result.closed} worktree_removed=${result.worktreeRemoved}`)
+      await refreshReadyForAutoMode()
     } catch (e) {
       task.status = 'failed'
-      task.error = `Merge failed: ${e}`
+      task.error = `Controller sync failed: ${e}`
       activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
-      logFrontend('error', `[auto-mode] Merge failed for ${issueId}: ${e}`)
-      logEvent('merge_failed', issueId, `Merge failed`, { error: String(e) })
+      logFrontend('error', `[auto-mode] Controller sync failed for ${issueId}: ${e}`)
+      logEvent('review_failed', issueId, `Controller sync failed`, { error: String(e) })
     }
   }
 
@@ -398,15 +331,8 @@ export function useAutoMode(
       const action = getAutoModeLifecycleAction(task, issue)
       if (!action) continue
 
-      if (action.type === 'dispatch_review') {
-        dispatchReview(task.issueId, action.commit)
-      } else if (action.type === 'merge_approved') {
-        mergeApproved(task.issueId)
-      } else if (action.type === 'review_failed') {
-        task.status = 'failed'
-        task.error = action.error
-        activeTaskMap.value = new Map(activeTaskMap.value.set(task.issueId, { ...task }))
-        logEvent('review_failed', task.issueId, 'Review requested changes', { error: action.error })
+      if (action.type === 'sync_controller') {
+        syncController(task.issueId, action.reason)
       }
     }
   }
@@ -460,7 +386,5 @@ export function useAutoMode(
     isDispatching,
     canDispatch,
     cancelTask,
-    dispatchReview,
-    mergeApproved,
   }
 }

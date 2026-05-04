@@ -85,10 +85,10 @@ describe('getAutoModeLifecycleAction', () => {
       }),
     )
 
-    expect(action).toEqual({ type: 'dispatch_review', commit: 'abc123' })
+    expect(action).toEqual({ type: 'sync_controller', reason: 'Executor complete' })
   })
 
-  it('merges when an active reviewing task has an approved verdict', () => {
+  it('syncs controller state when an active reviewing task has an approved verdict', () => {
     const action = getAutoModeLifecycleAction(
       makeTask({ issueId: 'borabr-unf.1', status: 'reviewing' }),
       makeIssue({
@@ -102,10 +102,10 @@ describe('getAutoModeLifecycleAction', () => {
       }),
     )
 
-    expect(action).toEqual({ type: 'merge_approved' })
+    expect(action).toEqual({ type: 'sync_controller', reason: 'Review approved' })
   })
 
-  it('marks review failure when a reviewer requests changes', () => {
+  it('syncs controller state when a reviewer requests changes', () => {
     const action = getAutoModeLifecycleAction(
       makeTask({ issueId: 'borabr-unf.1', status: 'reviewing' }),
       makeIssue({
@@ -119,6 +119,6 @@ describe('getAutoModeLifecycleAction', () => {
       }),
     )
 
-    expect(action).toEqual({ type: 'review_failed', error: 'REVIEW_VERDICT: CHANGES_REQUESTED\nFindings: broken' })
+    expect(action).toEqual({ type: 'sync_controller', reason: 'Review requested changes' })
   })
 })

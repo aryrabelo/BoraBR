@@ -10,12 +10,12 @@
     "provider": "gitWorktree",
     "branch": "epic/borabr-tnf",
     "worktreePath": "/Users/aryrabelo/Sites/worktrees/epic-borabr-tnf",
-    "phase": "executor_complete",
-    "lastEvent": "Executor already complete",
+    "phase": "review_approved",
+    "lastEvent": "Review approved",
     "error": null,
     "attempts": 1,
     "surface": null,
-    "updatedAt": "1777914889213"
+    "updatedAt": "1777919638181"
   },
   {
     "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
@@ -64,11 +64,47 @@
     "provider": "gitWorktree",
     "branch": "epic/borabr-h02.4",
     "worktreePath": "/Users/aryrabelo/Sites/worktrees/epic-borabr-h02.4",
-    "phase": "executing",
-    "lastEvent": "Executor dispatched",
+    "phase": "executor_complete",
+    "lastEvent": "Executor complete",
     "error": null,
     "attempts": 1,
     "surface": "workspace:60",
-    "updatedAt": "1777918270756"
+    "updatedAt": "1777919638405"
+  },
+  {
+    "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
+    "projectName": "beads-task-issue-tracker",
+    "baseBranch": "master",
+    "issueId": "borabr-h02.5",
+    "issueTitle": "Disable legacy auto-mode merge/close path",
+    "epicId": "borabr-h02",
+    "epicTitle": null,
+    "provider": "wt",
+    "branch": "epic/borabr-h02.5",
+    "worktreePath": "/Users/aryrabelo/Sites/worktrees/epic-borabr-h02.5",
+    "phase": "executor_complete",
+    "lastEvent": "Executor already complete",
+    "error": null,
+    "attempts": 1,
+    "surface": null,
+    "updatedAt": "1777919673611"
+  },
+  {
+    "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
+    "projectName": "beads-task-issue-tracker",
+    "baseBranch": "master",
+    "issueId": "borabr-h02.5.1",
+    "issueTitle": "Reproduce bug",
+    "epicId": "borabr-h02.5",
+    "epicTitle": null,
+    "provider": "gitWorktree",
+    "branch": "epic/borabr-h02.5",
+    "worktreePath": "/Users/aryrabelo/Sites/worktrees/epic-borabr-h02.5",
+    "phase": "review_approved",
+    "lastEvent": "Review approved",
+    "error": null,
+    "attempts": 1,
+    "surface": "workspace:63",
+    "updatedAt": "1777919643375"
   }
 ]
