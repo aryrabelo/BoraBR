@@ -1,0 +1,27 @@
+.beads/auto-mode-runs.json
+  01707aec1acd73f5 98,113-114
+.beads/issues.jsonl
+  01707aec1acd73f5 50
+.beads/auto-mode-log.jsonl
+  01707aec1acd73f5 58-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "e4dc0ae4f1c1c12015447f5bdfde25cef3b04d93",
+  "prompts": {
+    "01707aec1acd73f5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019df3c7-c9d0-7062-ad5b-3500284b4536",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 11,
+      "accepted_lines": 490,
+      "overriden_lines": 0
+    }
+  }
+}
