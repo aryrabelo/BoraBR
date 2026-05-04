@@ -120,6 +120,7 @@ const refreshAutoModeReadyIssues = async () => {
 }
 const { enabled: autoModeEnabled, activeTaskList: autoModeTasks, isDispatching: autoModeDispatching, cancelTask: autoModeCancelTask } = useAutoMode(beadsPath, readyIssues, inProgressIssuesForAutoMode, {
   refreshReady: refreshAutoModeReadyIssues,
+  allIssues: issues,
 })
 const autoModeDispatchingIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'dispatching').map(t => t.issueId)))
 const autoModeRunningIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'running').map(t => t.issueId)))

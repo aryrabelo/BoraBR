@@ -63,9 +63,16 @@ export interface AutoModeCancelTaskResponse {
   issueReset: boolean
 }
 
+export type AutoModeLifecycleAction =
+  | { type: 'dispatch_review', commit: string }
+  | { type: 'merge_approved' }
+  | { type: 'review_failed', error: string }
+  | null
+
 export interface UseAutoModeOptions {
   refreshReady?: () => Promise<Issue[] | null | void>
   readyPollIntervalMs?: number
+  allIssues?: Ref<Issue[]>
 }
 
 const DISPATCH_COOLDOWN = 10_000
@@ -98,6 +105,37 @@ function compareAutoModeIssues(a: Issue, b: Issue): number {
 
 export function hasAutoModeInProgressTask(issues: Issue[]): boolean {
   return issues.some(issue => issue.status === 'in_progress' && issue.type !== 'epic')
+}
+
+function latestMatchingComment(issue: Issue, predicate: (content: string) => boolean): string | null {
+  for (const comment of [...(issue.comments ?? [])].reverse()) {
+    if (predicate(comment.content)) return comment.content
+  }
+  return null
+}
+
+function extractExecutorCommit(content: string): string | null {
+  const match = content.match(/^commit:\s*([0-9a-f]{6,40})\s*$/im)
+  return match?.[1] ?? null
+}
+
+export function getAutoModeLifecycleAction(task: AutoModeTask, issue: Issue): AutoModeLifecycleAction {
+  if (task.status === 'running') {
+    const executorComplete = latestMatchingComment(issue, content => content.includes('EXECUTOR_COMPLETE'))
+    const commit = executorComplete ? extractExecutorCommit(executorComplete) : null
+    return commit ? { type: 'dispatch_review', commit } : null
+  }
+
+  if (task.status === 'reviewing') {
+    const verdict = latestMatchingComment(issue, content => content.includes('REVIEW_VERDICT:'))
+    if (!verdict) return null
+    if (/REVIEW_VERDICT:\s*APPROVED/i.test(verdict)) return { type: 'merge_approved' }
+    if (/REVIEW_VERDICT:\s*CHANGES_REQUESTED/i.test(verdict)) {
+      return { type: 'review_failed', error: verdict }
+    }
+  }
+
+  return null
 }
 
 export function pickAutoModeIssue(
@@ -352,8 +390,32 @@ export function useAutoMode(
     dispatchTask(topIssue)
   }
 
-  watch([canDispatch, readyIssues], () => {
+  function reconcileLifecycle(issues: Issue[]) {
+    for (const task of activeTaskMap.value.values()) {
+      const issue = issues.find(candidate => candidate.id === task.issueId)
+      if (!issue) continue
+
+      const action = getAutoModeLifecycleAction(task, issue)
+      if (!action) continue
+
+      if (action.type === 'dispatch_review') {
+        dispatchReview(task.issueId, action.commit)
+      } else if (action.type === 'merge_approved') {
+        mergeApproved(task.issueId)
+      } else if (action.type === 'review_failed') {
+        task.status = 'failed'
+        task.error = action.error
+        activeTaskMap.value = new Map(activeTaskMap.value.set(task.issueId, { ...task }))
+        logEvent('review_failed', task.issueId, 'Review requested changes', { error: action.error })
+      }
+    }
+  }
+
+  const lifecycleIssues = computed(() => options.allIssues?.value ?? [...readyIssues.value, ...inProgressIssues.value])
+
+  watch([canDispatch, readyIssues, lifecycleIssues], () => {
     tryDispatch()
+    reconcileLifecycle(lifecycleIssues.value)
   })
 
   watch(enabled, (on) => {

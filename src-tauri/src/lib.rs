@@ -3671,18 +3671,19 @@ struct AutoModeDispatchScope {
 }
 
 fn auto_mode_dispatch_scope(epic_id: &str, issue_id: &str) -> AutoModeDispatchScope {
+    let epic_branch = format!("epic/{}", epic_id);
+    let epic_worktree_name = format!("epic-{}", epic_id);
     if issue_id == epic_id {
         AutoModeDispatchScope {
-            branch: format!("epic-{}", epic_id),
-            worktree_name: epic_id.to_string(),
+            branch: epic_branch,
+            worktree_name: epic_worktree_name,
             workspace_name: format!("epic:{}", epic_id),
             is_epic: true,
         }
     } else {
-        let task_name = format!("task-{}", issue_id);
         AutoModeDispatchScope {
-            branch: task_name.clone(),
-            worktree_name: task_name,
+            branch: epic_branch,
+            worktree_name: epic_worktree_name,
             workspace_name: format!("task:{}", issue_id),
             is_epic: false,
         }
@@ -3758,7 +3759,7 @@ fn build_auto_mode_reviewer_command(
 ) -> String {
     let assignee = format!("cmux:{}", cmux_ref);
     let prompt = format!(
-        "You are an independent reviewer for Beads task {issue_id} in epic {epic_id}. Task title: {issue_title}. You have fresh context — no bias from the executor. Branch: `{task_branch}`, executor commit: {executor_commit}. Steps: 1) Run `br show {issue_id}` to understand requirements. 2) Run `git log --oneline master..{task_branch}` and `git diff master...{task_branch}` to see all changes. 3) Run quality gates: `pnpm test` and `npx vue-tsc --noEmit`. 4) Review the diff against the task requirements — check correctness, test coverage, no unrelated changes, no security issues. 5) Add a structured BR comment with your verdict: `br comment {issue_id} 'REVIEW_VERDICT: APPROVED|CHANGES_REQUESTED\\nSummary: ...\\nFindings: ...'`. Use assignee {assignee}. If tests or type-check fail, verdict must be CHANGES_REQUESTED with failure details. Do not modify code — only validate and report.",
+        "You are an independent reviewer for Beads task {issue_id} in epic {epic_id}. Task title: {issue_title}. You have fresh context — no bias from the executor. Branch: `{task_branch}`, executor commit: {executor_commit}. Steps: 1) Run `br show {issue_id}` to understand requirements. 2) Run `git log --oneline master..{task_branch}` and `git diff master...{task_branch}` to see all changes. 3) Run quality gates: `pnpm test` and `npx vue-tsc --noEmit`. 4) Review the diff against the task requirements — check correctness, test coverage, no unrelated changes, no security issues. 5) Add a structured BR comment with your verdict: `br comments add --actor auto-mode {issue_id} --message 'REVIEW_VERDICT: APPROVED|CHANGES_REQUESTED\\nSummary: ...\\nFindings: ...' --json`. Use assignee {assignee}. If tests or type-check fail, verdict must be CHANGES_REQUESTED with failure details. Do not modify code — only validate and report.",
     );
 
     format!("claude {}", shell_single_quote(&prompt))
@@ -3964,6 +3965,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     // 3. Check if cmux workspace already exists for this scope.
     let workspace_name = scope.workspace_name.clone();
     let mut workspace_ref: Option<String> = None;
+    let mut reused_workspace = false;
     let list_output = run_cmux(&["list-workspaces".to_string()]);
     if let Ok(ref output) = list_output {
         if output.status.success() {
@@ -3978,6 +3980,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
                     "select-workspace".to_string(),
                     "--workspace".to_string(), existing_ref.clone(),
                 ]);
+                reused_workspace = true;
                 workspace_ref = Some(existing_ref);
             }
         }
@@ -4008,7 +4011,12 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     };
 
     // 5. Send Claude command for the selected dispatch scope.
-    let orchestrator_command = build_auto_mode_agent_command(epic_id, issue_id, &request.issue_title, &workspace_ref);
+    let fresh_command = build_auto_mode_agent_command(epic_id, issue_id, &request.issue_title, &workspace_ref);
+    let orchestrator_command = if reused_workspace {
+        build_auto_mode_resume_command(&worktree_dir).unwrap_or(fresh_command)
+    } else {
+        fresh_command
+    };
     let cmux_send_args = vec![
         "send".to_string(),
         "--workspace".to_string(), workspace_ref.clone(),
@@ -8665,16 +8673,16 @@ prunable gitdir file points to non-existent location
     }
 
     #[test]
-    fn auto_mode_dispatch_scope_uses_task_names_for_child_work() {
+    fn auto_mode_dispatch_scope_uses_shared_epic_branch_for_child_work() {
         let task_scope = auto_mode_dispatch_scope("borabr-unf", "borabr-unf.2");
-        assert_eq!(task_scope.branch, "task-borabr-unf.2");
-        assert_eq!(task_scope.worktree_name, "task-borabr-unf.2");
+        assert_eq!(task_scope.branch, "epic/borabr-unf");
+        assert_eq!(task_scope.worktree_name, "epic-borabr-unf");
         assert_eq!(task_scope.workspace_name, "task:borabr-unf.2");
         assert!(!task_scope.is_epic);
 
         let epic_scope = auto_mode_dispatch_scope("borabr-unf", "borabr-unf");
-        assert_eq!(epic_scope.branch, "epic-borabr-unf");
-        assert_eq!(epic_scope.worktree_name, "borabr-unf");
+        assert_eq!(epic_scope.branch, "epic/borabr-unf");
+        assert_eq!(epic_scope.worktree_name, "epic-borabr-unf");
         assert_eq!(epic_scope.workspace_name, "epic:borabr-unf");
         assert!(epic_scope.is_epic);
     }
@@ -8769,6 +8777,7 @@ prunable gitdir file points to non-existent location
         assert!(command.contains("git diff master...task-borabr-unf.4"));
         assert!(command.contains("pnpm test"));
         assert!(command.contains("vue-tsc --noEmit"));
+        assert!(command.contains("br comments add --actor auto-mode borabr-unf.4"));
         assert!(command.contains("REVIEW_VERDICT"));
         assert!(command.contains("APPROVED"));
         assert!(command.contains("CHANGES_REQUESTED"));
