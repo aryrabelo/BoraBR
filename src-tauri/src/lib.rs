@@ -4853,6 +4853,21 @@ async fn auto_mode_run_create_pr(request: AutoModeRunActionRequest) -> Result<Au
         "Auto-mode PR for {}\n\nProvider: {}\nWorktree: {}\n",
         run.issue_id, run.provider, run.worktree_path,
     );
+    let push_output = new_command("git")
+        .args(["push", "--set-upstream", "origin", &run.branch])
+        .current_dir(&run.worktree_path)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to push branch before PR/UPR creation: {}", e))?;
+    if !push_output.status.success() {
+        let stderr = String::from_utf8_lossy(&push_output.stderr).trim().to_string();
+        let _ = update_auto_mode_run(&project_root, &request.issue_id, |run| {
+            run.phase = "failed".to_string();
+            run.last_event = Some("PR/UPR branch push failed".to_string());
+            run.error = Some(stderr.clone());
+        });
+        return Err(format!("git push failed before PR/UPR creation: {}", stderr));
+    }
     let output = new_command("gh")
         .args(["pr", "create", "--base", &base_branch, "--head", &run.branch, "--title", &title, "--body", &body])
         .current_dir(&run.worktree_path)
