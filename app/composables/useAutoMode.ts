@@ -186,6 +186,26 @@ export function useAutoMode(
     return true
   })
 
+  async function caffeinateStart() {
+    if (!isTauri()) return
+    try {
+      const started = await invoke<boolean>('caffeinate_start')
+      if (started) logFrontend('info', '[auto-mode] caffeinate started — Mac sleep prevented')
+    } catch (e) {
+      logFrontend('warn', `[auto-mode] caffeinate_start failed: ${e}`)
+    }
+  }
+
+  async function caffeinateStop() {
+    if (!isTauri()) return
+    try {
+      const stopped = await invoke<boolean>('caffeinate_stop')
+      if (stopped) logFrontend('info', '[auto-mode] caffeinate stopped — Mac sleep allowed')
+    } catch (e) {
+      logFrontend('warn', `[auto-mode] caffeinate_stop failed: ${e}`)
+    }
+  }
+
   async function dispatchTask(issue: Issue) {
     if (isDispatching.value) return
 
@@ -201,6 +221,7 @@ export function useAutoMode(
     try {
       logFrontend('info', `[auto-mode] Dispatching ${issue.id}: ${issue.title}`)
       logEvent('dispatch_start', issue.id, `Dispatching: ${issue.title}`)
+      await caffeinateStart()
 
       const result = await invoke<AutoModeDispatchResponse>('auto_mode_dispatch', {
         request: {
@@ -345,6 +366,13 @@ export function useAutoMode(
       logFrontend('info', `[auto-mode] Disabled`)
       logEvent('disabled', '-', `Auto-mode disabled`)
       stopReadyPolling()
+      caffeinateStop()
+    }
+  })
+
+  watch(hasRunningTask, (running) => {
+    if (!running && enabled.value) {
+      caffeinateStop()
     }
   })
 
@@ -360,6 +388,7 @@ export function useAutoMode(
 
   onUnmounted(() => {
     stopReadyPolling()
+    caffeinateStop()
   })
 
   return {

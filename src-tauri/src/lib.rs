@@ -31,6 +31,10 @@ static CLI_BINARY: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new("bd".to
 static PROBE_CHILD: LazyLock<Mutex<Option<std::process::Child>>> =
     LazyLock::new(|| Mutex::new(None));
 
+// caffeinate child process — prevents Mac sleep during auto-mode
+static CAFFEINATE_CHILD: LazyLock<Mutex<Option<std::process::Child>>> =
+    LazyLock::new(|| Mutex::new(None));
+
 // Per-project mutex to prevent concurrent bd/Dolt access.
 // bd 0.55 uses embedded Dolt which crashes (SIGSEGV) when two bd processes
 // access the same database simultaneously. This serializes all bd calls per project.
@@ -3781,6 +3785,42 @@ pub struct AutoModeDispatchResponse {
     pub surface: String,
     pub worktree_path: String,
     pub branch: String,
+}
+
+#[tauri::command]
+fn caffeinate_start() -> Result<bool, String> {
+    let mut guard = CAFFEINATE_CHILD.lock().map_err(|e| e.to_string())?;
+    if let Some(ref mut child) = *guard {
+        match child.try_wait() {
+            Ok(Some(_)) => { /* exited, will replace below */ }
+            Ok(None) => {
+                log::info!("[caffeinate] Already running (pid {})", child.id());
+                return Ok(false);
+            }
+            Err(_) => { /* assume dead, replace */ }
+        }
+    }
+    let child = new_command("caffeinate")
+        .arg("-i")
+        .spawn()
+        .map_err(|e| format!("Failed to spawn caffeinate: {}", e))?;
+    log::info!("[caffeinate] Started (pid {})", child.id());
+    *guard = Some(child);
+    Ok(true)
+}
+
+#[tauri::command]
+fn caffeinate_stop() -> Result<bool, String> {
+    let mut guard = CAFFEINATE_CHILD.lock().map_err(|e| e.to_string())?;
+    if let Some(mut child) = guard.take() {
+        let pid = child.id();
+        let _ = child.kill();
+        let _ = child.wait();
+        log::info!("[caffeinate] Stopped (pid {})", pid);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 #[tauri::command]
@@ -7878,6 +7918,8 @@ pub fn run() {
             agent_process_status,
             cmux_focus_surface,
             cmux_send_prompt,
+            caffeinate_start,
+            caffeinate_stop,
             auto_mode_dispatch,
             auto_mode_dispatch_review,
             auto_mode_merge_approved,
