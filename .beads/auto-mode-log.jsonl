@@ -18,3 +18,11 @@
 {"timestamp":"2026-05-04T17:06:08.889Z","issueId":"borabr-tnf.1","eventType":"dispatch_start","detail":"Dispatching: Polish app header typography for auto-mode smoke-test"}
 {"timestamp":"2026-05-04T17:06:08.890Z","issueId":"-","eventType":"enabled","detail":"Auto-mode enabled for /Users/aryrabelo/Sites/beads-task-issue-tracker"}
 {"timestamp":"2026-05-04T17:06:09.027Z","issueId":"borabr-tnf.1","eventType":"dispatch_success","detail":"Running on workspace:53, branch epic/borabr-tnf","surface":"workspace:53"}
+{"timestamp":"2026-05-04T17:14:36.555Z","issueId":"borabr-tnf.1","eventType":"dispatch_start","detail":"Dispatching: Polish app header typography for auto-mode smoke-test"}
+{"timestamp":"2026-05-04T17:14:36.662Z","issueId":"borabr-tnf.1","eventType":"dispatch_success","detail":"Running on , branch epic/borabr-tnf","surface":""}
+{"timestamp":"2026-05-04T17:14:49.073Z","issueId":"borabr-tnf.1","eventType":"dispatch_start","detail":"Dispatching: Polish app header typography for auto-mode smoke-test"}
+{"timestamp":"2026-05-04T17:14:49.216Z","issueId":"borabr-tnf.1","eventType":"dispatch_success","detail":"Running on , branch epic/borabr-tnf","surface":""}
+{"timestamp":"2026-05-04T18:11:08.689Z","issueId":"borabr-h02.4","eventType":"dispatch_start","detail":"Dispatching: Fix epic Play bypassing deterministic auto-mode"}
+{"timestamp":"2026-05-04T18:11:09.768Z","issueId":"borabr-h02.4","eventType":"dispatch_failed","detail":"Dispatch failed","error":"{\n  \"error\": {\n    \"code\": \"VALIDATION_FAILED\",\n    \"message\": \"Validation failed: workflow: workflow gate failed: workflow:bug-investigation steps_incomplete; next: br ready --parent borabr-h02.4 --json\",\n    \"hint\": null,\n    \"retryable\": true,\n    \"context\": {\n      \"field\": \"workflow\",\n      \"reason\": \"workflow gate failed: workflow:bug-investigation steps_incomplete; next: br ready --parent borabr-h02.4 --json\"\n    }\n  }\n}\n"}
+{"timestamp":"2026-05-04T18:11:09.769Z","issueId":"borabr-h02.4.2","eventType":"dispatch_start","detail":"Dispatching: Run five whys"}
+{"timestamp":"2026-05-04T18:11:10.757Z","issueId":"borabr-h02.4.2","eventType":"dispatch_success","detail":"Running on workspace:60, branch epic/borabr-h02.4","surface":"workspace:60"}

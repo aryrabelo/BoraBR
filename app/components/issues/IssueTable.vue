@@ -71,6 +71,11 @@ const emit = defineEmits<{
 
 const pinnedSet = computed(() => new Set(props.pinnedIds ?? []))
 
+const getAutoModeDispatchTarget = (issue: Issue, children: Issue[] = []): Issue | null => {
+  if (issue.type !== 'epic') return issue.status === 'open' ? issue : null
+  return children.find(child => child.status === 'open' && child.type !== 'epic') ?? null
+}
+
 // Index of the first non-pinned group (for visual separator)
 const pinnedSeparatorIndex = computed(() => {
   if (!props.groupedIssues || pinnedSet.value.size === 0) return -1
@@ -656,13 +661,13 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                     <div class="flex items-start gap-2">
                       <span class="min-w-0 flex-1 text-xs font-medium line-clamp-2 break-words">{{ group.epic.title }}</span>
                       <AutoModeDispatchButton
-                        v-if="autoModeEnabled"
-                        :issue-id="group.epic.id"
-                        :issue-status="group.epic.status"
-                        :dispatching="autoModeDispatchingIds?.has(group.epic.id)"
-                        :running="autoModeRunningIds?.has(group.epic.id)"
-                        @dispatch="emit('auto-dispatch', group.epic)"
-                        @cancel="emit('auto-cancel', group.epic)"
+                        v-if="autoModeEnabled && getAutoModeDispatchTarget(group.epic, group.children)"
+                        :issue-id="getAutoModeDispatchTarget(group.epic, group.children)!.id"
+                        :issue-status="getAutoModeDispatchTarget(group.epic, group.children)!.status"
+                        :dispatching="autoModeDispatchingIds?.has(getAutoModeDispatchTarget(group.epic, group.children)!.id)"
+                        :running="autoModeRunningIds?.has(getAutoModeDispatchTarget(group.epic, group.children)!.id)"
+                        @dispatch="emit('auto-dispatch', getAutoModeDispatchTarget(group.epic, group.children)!)"
+                        @cancel="emit('auto-cancel', getAutoModeDispatchTarget(group.epic, group.children)!)"
                       />
                       <IssueTerminalToggle
                         v-if="canOpenTaskTerminal"

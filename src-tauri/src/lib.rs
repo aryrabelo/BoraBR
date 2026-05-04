@@ -3735,15 +3735,7 @@ fn build_auto_mode_executor_command(
     _cmux_ref: &str,
 ) -> String {
     let prompt = format!(
-        "Read .claude/auto-mode-prompt.md and follow the instructions exactly. You are executing a SINGLE task only: {issue_id}. Run `br show {issue_id} --json` first, then claim it with `br update --actor auto-mode {issue_id} --status in_progress --claim --json`. Implement the task, run tests, commit, then close with `br close --actor auto-mode {issue_id} --reason \"<what you did>\"` and `br sync --flush-only`. Do NOT loop or pick other tasks.",
-    );
-
-    format!("claude {}", shell_single_quote(&prompt))
-}
-
-fn build_auto_mode_epic_orchestrator_command(epic_id: &str) -> String {
-    let prompt = format!(
-        "Read .claude/auto-mode-prompt.md and follow the instructions exactly. Replace EPIC_ID with {epic_id}. The br CLI is your issue tracker — use `br` (never `bd`). Always pass `--actor auto-mode` and `--json` flags. Loop through all open tasks in the epic, claim each before working, close each when done with evidence. Do NOT skip the claim or close steps.",
+        "You are executing a SINGLE task only: {issue_id}. Do NOT read .claude/auto-mode-prompt.md; that file is only for the deprecated epic orchestrator. Run `br show {issue_id} --json` first. The BoraBR controller owns lifecycle state, review, PR creation, and closure. Implement the task, run tests, commit, then add durable executor evidence with `br comments add --actor auto-mode {issue_id} --message 'EXECUTOR_COMPLETE\\ncommit: <commit sha>\\nbranch: <branch>\\nsummary: <what you did and what passed>' --json` and `br sync --flush-only`. Do NOT close the issue. Do NOT loop or pick other tasks.",
     );
 
     format!("claude {}", shell_single_quote(&prompt))
@@ -3771,11 +3763,8 @@ fn build_auto_mode_agent_command(
     issue_title: &str,
     cmux_ref: &str,
 ) -> String {
-    if issue_id == epic_id {
-        build_auto_mode_epic_orchestrator_command(epic_id)
-    } else {
-        build_auto_mode_executor_command(epic_id, issue_id, issue_title, cmux_ref)
-    }
+    debug_assert_ne!(issue_id, epic_id, "epic auto-mode dispatch is controller-owned");
+    build_auto_mode_executor_command(epic_id, issue_id, issue_title, cmux_ref)
 }
 
 fn mark_auto_mode_issue_dispatched(project_path: &str, issue_id: &str, cmux_ref: &str) -> Result<(), String> {
@@ -3942,6 +3931,10 @@ fn find_auto_mode_run(project_path: &str, issue_id: &str) -> Result<AutoModeRunR
         .into_iter()
         .find(|candidate| candidate.issue_id == issue_id)
         .ok_or_else(|| format!("No auto-mode run for {}", issue_id))
+}
+
+fn is_auto_mode_epic_run(run: &AutoModeRunRecord) -> bool {
+    run.epic_id.as_deref() == Some(run.issue_id.as_str())
 }
 
 fn auto_mode_run_phase_after_issue_event(
@@ -4290,6 +4283,10 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     let project_path = &git_root;
     let base_branch = auto_mode_project_base_branch(project_path);
     let raw_issue = workflow_issue_from_project(project_path, issue_id)?;
+
+    if scope.is_epic || raw_issue.issue_type == "epic" {
+        return Err("auto-mode dispatch blocked: epic dispatch is controller-owned; dispatch a child task instead".to_string());
+    }
 
     if raw_issue.status == "closed" {
         return Err(format!("auto-mode dispatch blocked: {} is already closed", issue_id));
@@ -4883,6 +4880,13 @@ async fn auto_mode_tick(project_path: String) -> Result<AutoModeTickResponse, St
     let mut runs = read_auto_mode_runs(&project_root)?;
     for run in runs.iter_mut() {
         if matches!(run.phase.as_str(), "done" | "cancelled" | "failed") {
+            continue;
+        }
+        if is_auto_mode_epic_run(run) {
+            run.phase = "cancelled".to_string();
+            run.last_event = Some("Legacy epic dispatch cancelled".to_string());
+            run.error = Some("Epic dispatch is controller-owned; dispatch child tasks instead".to_string());
+            run.updated_at = Some(now_rfc3339_string());
             continue;
         }
         let comments = auto_mode_issue_comments(&project_root, &run.issue_id);
@@ -9384,29 +9388,21 @@ prunable gitdir file points to non-existent location
         );
 
         assert!(command.starts_with("claude "));
-        assert!(command.contains(".claude/auto-mode-prompt.md"));
+        assert!(command.contains("Do NOT read .claude/auto-mode-prompt.md"));
         assert!(command.contains("borabr-unf.7"));
         assert!(command.contains("br show borabr-unf.7"));
-        assert!(command.contains("br close --actor auto-mode borabr-unf.7"));
+        assert!(command.contains("EXECUTOR_COMPLETE"));
+        assert!(command.contains("Do NOT close the issue"));
         assert!(command.contains("Do NOT loop"));
     }
 
     #[test]
-    fn auto_mode_epic_orchestrator_references_prompt_file() {
-        let command = build_auto_mode_agent_command(
-            "borabr-unf",
-            "borabr-unf",
-            "CMUX Task Orchestration",
-            "workspace:41",
-        );
+    fn auto_mode_epic_scope_is_controller_owned() {
+        let scope = auto_mode_dispatch_scope("borabr-unf", "borabr-unf");
 
-        assert!(command.starts_with("claude "));
-        assert!(command.contains(".claude/auto-mode-prompt.md"));
-        assert!(command.contains("borabr-unf"));
-        assert!(command.contains("--actor auto-mode"));
-        assert!(command.contains("--json"));
-        assert!(command.contains("claim"));
-        assert!(command.contains("close"));
+        assert!(scope.is_epic);
+        assert_eq!(scope.branch, "epic/borabr-unf");
+        assert_eq!(scope.workspace_name, "epic:borabr-unf");
     }
 
     #[test]
@@ -9522,6 +9518,30 @@ prunable gitdir file points to non-existent location
             auto_mode_run_phase_after_issue_event("reviewing", &[changes.to_string()]),
             ("review_changes_requested".to_string(), Some("Review requested changes".to_string()), Some(changes.to_string())),
         );
+    }
+
+    #[test]
+    fn auto_mode_identifies_legacy_epic_runs() {
+        let run = AutoModeRunRecord {
+            project_path: "/repo".to_string(),
+            project_name: Some("repo".to_string()),
+            base_branch: Some("master".to_string()),
+            issue_id: "borabr-tnf".to_string(),
+            issue_title: "Epic".to_string(),
+            epic_id: Some("borabr-tnf".to_string()),
+            epic_title: None,
+            provider: "gitWorktree".to_string(),
+            branch: "epic/borabr-tnf".to_string(),
+            worktree_path: "/worktree".to_string(),
+            phase: "executing".to_string(),
+            last_event: None,
+            error: None,
+            attempts: 1,
+            surface: None,
+            updated_at: None,
+        };
+
+        assert!(is_auto_mode_epic_run(&run));
     }
 
     #[test]
