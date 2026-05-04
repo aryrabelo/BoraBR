@@ -117,7 +117,7 @@ const refreshAutoModeReadyIssues = async () => {
   }
   return readyData
 }
-const { enabled: autoModeEnabled, activeTaskList: autoModeTasks, isDispatching: autoModeDispatching } = useAutoMode(beadsPath, readyIssues, inProgressIssuesForAutoMode, {
+const { enabled: autoModeEnabled, activeTaskList: autoModeTasks, isDispatching: autoModeDispatching, cancelTask: autoModeCancelTask } = useAutoMode(beadsPath, readyIssues, inProgressIssuesForAutoMode, {
   refreshReady: refreshAutoModeReadyIssues,
 })
 const autoModeDispatchingIds = computed(() => new Set(autoModeTasks.value.filter(t => t.status === 'dispatching').map(t => t.issueId)))
@@ -1188,8 +1188,8 @@ const handleAutoDispatch = async (issue: Issue) => {
   }
 }
 
-const handleAutoPause = (_issue: Issue) => {
-  // TODO: implement pause (stop agent in cmux surface)
+const handleAutoCancel = async (issue: Issue) => {
+  await autoModeCancelTask(issue.id)
 }
 
 const handleSelectIssue = async (issue: Issue) => {
@@ -1723,7 +1723,7 @@ watch(
               @sort="setSort"
               @toggle-pin="togglePin"
               @auto-dispatch="handleAutoDispatch"
-              @auto-pause="handleAutoPause"
+              @auto-cancel="handleAutoCancel"
             />
 
             <div v-if="isLoading" class="text-center text-muted-foreground py-4">
@@ -2078,7 +2078,7 @@ watch(
           @sort="setSort"
           @toggle-pin="togglePin"
           @auto-dispatch="handleAutoDispatch"
-          @auto-pause="handleAutoPause"
+          @auto-cancel="handleAutoCancel"
         />
 
         <TerminalPanel

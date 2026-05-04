@@ -51,6 +51,17 @@ export interface AutoModeMergeApprovedResponse {
   worktreeRemoved: boolean
 }
 
+export interface AutoModeCancelTaskRequest {
+  projectPath: string
+  issueId: string
+  surface?: string
+}
+
+export interface AutoModeCancelTaskResponse {
+  workspaceClosed: boolean
+  issueReset: boolean
+}
+
 export interface UseAutoModeOptions {
   refreshReady?: () => Promise<Issue[] | null | void>
   readyPollIntervalMs?: number
@@ -268,6 +279,34 @@ export function useAutoMode(
     }
   }
 
+  async function cancelTask(issueId: string) {
+    const task = activeTaskMap.value.get(issueId)
+    if (!task) return
+
+    logFrontend('info', `[auto-mode] Cancelling task ${issueId}`)
+
+    try {
+      await invoke<AutoModeCancelTaskResponse>('auto_mode_cancel_task', {
+        request: {
+          projectPath: projectPath.value,
+          issueId,
+          surface: task.surface ?? undefined,
+        } satisfies AutoModeCancelTaskRequest,
+      })
+
+      const updated = new Map(activeTaskMap.value)
+      updated.delete(issueId)
+      activeTaskMap.value = updated
+
+      logFrontend('info', `[auto-mode] Task ${issueId} cancelled`)
+    } catch (e) {
+      logFrontend('error', `[auto-mode] Cancel failed for ${issueId}: ${e}`)
+      task.status = 'failed'
+      task.error = `Cancel failed: ${e}`
+      activeTaskMap.value = new Map(activeTaskMap.value.set(issueId, { ...task }))
+    }
+  }
+
   function tryDispatch() {
     if (!canDispatch.value) return
 
@@ -312,6 +351,7 @@ export function useAutoMode(
     hasRunningTask,
     isDispatching,
     canDispatch,
+    cancelTask,
     dispatchReview,
     mergeApproved,
   }

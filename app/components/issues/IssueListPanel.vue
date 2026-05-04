@@ -54,7 +54,7 @@ const emit = defineEmits<{
   sort: [field: string | null, direction: 'asc' | 'desc']
   'toggle-pin': [issueId: string]
   'auto-dispatch': [issue: Issue]
-  'auto-pause': [issue: Issue]
+  'auto-cancel': [issue: Issue]
 }>()
 
 const handleSort = (field: string | null, direction: 'asc' | 'desc') => {
@@ -132,7 +132,7 @@ const handleSort = (field: string | null, direction: 'asc' | 'desc') => {
       @sort="handleSort"
       @toggle-pin="emit('toggle-pin', $event)"
       @auto-dispatch="emit('auto-dispatch', $event)"
-      @auto-pause="emit('auto-pause', $event)"
+      @auto-cancel="emit('auto-cancel', $event)"
     />
   </div>
 </template>
