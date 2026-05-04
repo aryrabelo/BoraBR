@@ -4296,6 +4296,117 @@ async fn auto_mode_log_clear(project_path: String) -> Result<(), String> {
     Ok(())
 }
 
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeCancelTaskRequest {
+    pub project_path: String,
+    pub issue_id: String,
+    pub surface: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeCancelTaskResponse {
+    pub workspace_closed: bool,
+    pub issue_reset: bool,
+}
+
+#[tauri::command]
+async fn auto_mode_cancel_task(request: AutoModeCancelTaskRequest) -> Result<AutoModeCancelTaskResponse, String> {
+    let issue_id = &request.issue_id;
+
+    let project_path_raw = &request.project_path;
+    let git_root_output = new_command("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_path_raw)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to find git root: {}", e))?;
+    let project_path = if git_root_output.status.success() {
+        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
+    } else {
+        project_path_raw.clone()
+    };
+
+    log::info!("[auto-mode] [cancel] Cancelling task {}", issue_id);
+
+    // 1. Close cmux workspace (try provided surface first, then search by workspace name)
+    let mut workspace_closed = false;
+    let workspace_ref = if let Some(ref surface) = request.surface {
+        Some(surface.clone())
+    } else {
+        let epic_id = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
+        let scope = auto_mode_dispatch_scope(epic_id, issue_id);
+        let list_output = run_cmux(&["list-workspaces".to_string()]);
+        if let Ok(ref output) = list_output {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.lines()
+                    .find(|line| line.contains(&scope.workspace_name) || line.contains(issue_id))
+                    .and_then(|line| line.split_whitespace().find(|w| w.starts_with("workspace:")))
+                    .map(|s| s.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some(ref ws_ref) = workspace_ref {
+        let close_output = run_cmux(&[
+            "close-workspace".to_string(),
+            "--workspace".to_string(),
+            ws_ref.clone(),
+        ]);
+        match close_output {
+            Ok(o) if o.status.success() => {
+                log::info!("[auto-mode] [cancel] Closed workspace {}", ws_ref);
+                workspace_closed = true;
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                log::warn!("[auto-mode] [cancel] Failed to close workspace {}: {}", ws_ref, stderr.trim());
+            }
+            Err(e) => {
+                log::warn!("[auto-mode] [cancel] cmux close error: {}", e);
+            }
+        }
+    } else {
+        log::info!("[auto-mode] [cancel] No workspace ref found for {}, skipping close", issue_id);
+    }
+
+    // 2. Reset issue status back to open
+    let mut issue_reset = false;
+    let reset_result = execute_bd(
+        "update",
+        &[
+            issue_id.to_string(),
+            "--status=open".to_string(),
+            "--assignee=".to_string(),
+        ],
+        Some(&project_path),
+    );
+    match reset_result {
+        Ok(_) => {
+            log::info!("[auto-mode] [cancel] Issue {} reset to open", issue_id);
+            issue_reset = true;
+        }
+        Err(e) => {
+            log::warn!("[auto-mode] [cancel] Failed to reset issue {}: {}", issue_id, e);
+        }
+    }
+
+    // 3. Flush BR sync
+    let _ = execute_bd("sync", &["--flush-only".to_string()], Some(&project_path));
+
+    Ok(AutoModeCancelTaskResponse {
+        workspace_closed,
+        issue_reset,
+    })
+}
+
 #[tauri::command]
 async fn terminal_native_renderer_capabilities() -> Result<TerminalNativeRendererCapabilitiesResponse, String> {
     Ok(detect_native_terminal_renderer_capabilities())
@@ -7773,6 +7884,7 @@ pub fn run() {
             auto_mode_log_append,
             auto_mode_log_read,
             auto_mode_log_clear,
+            auto_mode_cancel_task,
             terminal_native_renderer_capabilities,
             terminal_open_native_renderer,
             terminal::terminal_create,

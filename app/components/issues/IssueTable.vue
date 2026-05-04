@@ -66,7 +66,7 @@ const emit = defineEmits<{
   sort: [field: string | null, direction: 'asc' | 'desc']
   'toggle-pin': [issueId: string]
   'auto-dispatch': [issue: Issue]
-  'auto-pause': [issue: Issue]
+  'auto-cancel': [issue: Issue]
 }>()
 
 const pinnedSet = computed(() => new Set(props.pinnedIds ?? []))
@@ -662,7 +662,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                         :dispatching="autoModeDispatchingIds?.has(group.epic.id)"
                         :running="autoModeRunningIds?.has(group.epic.id)"
                         @dispatch="emit('auto-dispatch', group.epic)"
-                        @pause="emit('auto-pause', group.epic)"
+                        @cancel="emit('auto-cancel', group.epic)"
                       />
                       <IssueTerminalToggle
                         v-if="canOpenTaskTerminal"
@@ -861,7 +861,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                           :dispatching="autoModeDispatchingIds?.has(child.id)"
                           :running="autoModeRunningIds?.has(child.id)"
                           @dispatch="emit('auto-dispatch', child)"
-                          @pause="emit('auto-pause', child)"
+                          @cancel="emit('auto-cancel', child)"
                         />
                         <IssueTerminalToggle
                           v-if="canOpenTaskTerminal"
@@ -1032,7 +1032,7 @@ const { focusedId, setFocused, handleKeydown, isFocused } = useKeyboardNavigatio
                         :dispatching="autoModeDispatchingIds?.has(issue.id)"
                         :running="autoModeRunningIds?.has(issue.id)"
                         @dispatch="emit('auto-dispatch', issue)"
-                        @pause="emit('auto-pause', issue)"
+                        @cancel="emit('auto-cancel', issue)"
                       />
                       <IssueTerminalToggle
                         v-if="canOpenTaskTerminal"
