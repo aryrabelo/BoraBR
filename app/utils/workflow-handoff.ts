@@ -1,4 +1,5 @@
 import type { Comment } from '~/types/issue'
+import type { Issue, ParentIssue } from '~/types/issue'
 
 export interface WorkflowHandoffPayload {
   branch?: string
@@ -12,6 +13,14 @@ export interface WorkflowHandoffRecord {
   stepId: string
   payload: WorkflowHandoffPayload
   comment: Comment
+}
+
+export interface WorkflowPullRequestAction {
+  issueId: string
+  branch: string
+  title: string
+  body: string
+  command: string
 }
 
 const STEP_HANDOFF_PATTERN = /^step:([a-z0-9._-]+)\s+(\{.*\})\s*$/is
@@ -92,6 +101,31 @@ export function buildWorkflowPullRequestCommand(options: {
     `--title ${shellQuote(options.title)}`,
     `--body ${shellQuote(options.body)}`,
   ].join(' ')
+}
+
+export function buildWorkflowPullRequestAction(
+  issue: Pick<Issue, 'id' | 'title' | 'comments'> & { parent?: ParentIssue },
+): WorkflowPullRequestAction | null {
+  const handoff = latestWorkflowHandoff(issue.comments)
+  const branch = handoff?.payload.branch
+  if (!branch) return null
+
+  const title = issue.parent?.title || issue.title
+  const changedFiles = handoff.payload.files.length > 0
+    ? `\nChanged files:\n${handoff.payload.files.map(file => `- ${file}`).join('\n')}`
+    : ''
+  const commit = handoff.payload.commit
+    ? `\n\nLatest handoff commit: ${handoff.payload.commit}`
+    : ''
+  const body = `Shared branch evidence for ${issue.id}${commit}${changedFiles}`
+
+  return {
+    issueId: issue.id,
+    branch,
+    title,
+    body,
+    command: buildWorkflowPullRequestCommand({ branch, title, body }),
+  }
 }
 
 function shellQuote(value: string): string {

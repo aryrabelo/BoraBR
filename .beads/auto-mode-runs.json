@@ -1,0 +1,20 @@
+[
+  {
+    "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
+    "projectName": "beads-task-issue-tracker",
+    "baseBranch": "master",
+    "issueId": "borabr-tnf.1",
+    "issueTitle": "Polish app header typography for auto-mode smoke-test",
+    "epicId": "borabr-tnf",
+    "epicTitle": null,
+    "provider": "gitWorktree",
+    "branch": "epic/borabr-tnf",
+    "worktreePath": "/Users/aryrabelo/Sites/worktrees/epic-borabr-tnf",
+    "phase": "executing",
+    "lastEvent": "Executor dispatched",
+    "error": null,
+    "attempts": 1,
+    "surface": "workspace:53",
+    "updatedAt": "1777913251549"
+  }
+]

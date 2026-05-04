@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Comment } from '~/types/issue'
 import {
+  buildWorkflowPullRequestAction,
   buildWorkflowHandoffComment,
   buildWorkflowPullRequestCommand,
   latestWorkflowHandoff,
@@ -64,5 +65,24 @@ describe('workflow handoff', () => {
       title: 'Fix auto-mode workflow',
       body: 'Shared branch evidence',
     })).toBe("gh pr create --base 'master' --head 'epic/borabr-lw4' --title 'Fix auto-mode workflow' --body 'Shared branch evidence'")
+  })
+
+  it('builds a PR action from the latest structured handoff', () => {
+    const action = buildWorkflowPullRequestAction({
+      id: 'borabr-lw4.3',
+      title: 'Fix auto-mode workflow',
+      comments: [
+        comment('step:implement {"branch":"epic/borabr-lw4","commit":"abc123","files":["app/utils/foo.ts"]}'),
+      ],
+      parent: { id: 'borabr-lw4', title: 'Auto-Mode UX Polish', status: 'open', priority: 'p2' },
+    })
+
+    expect(action).toEqual({
+      issueId: 'borabr-lw4.3',
+      branch: 'epic/borabr-lw4',
+      title: 'Auto-Mode UX Polish',
+      body: 'Shared branch evidence for borabr-lw4.3\n\nLatest handoff commit: abc123\nChanged files:\n- app/utils/foo.ts',
+      command: "gh pr create --base 'master' --head 'epic/borabr-lw4' --title 'Auto-Mode UX Polish' --body 'Shared branch evidence for borabr-lw4.3\n\nLatest handoff commit: abc123\nChanged files:\n- app/utils/foo.ts'",
+    })
   })
 })

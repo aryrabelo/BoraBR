@@ -126,6 +126,11 @@ export interface AutoModeRunRecord {
   updatedAt?: string | null
 }
 
+export interface WorkflowCreatePullRequestResponse {
+  pullRequestUrl: string
+  branch: string
+}
+
 export interface ProjectWorktree {
   rootPath: string
   worktreePath: string
@@ -246,6 +251,18 @@ export async function autoModeRunAction(
     open_worktree: 'auto_mode_open_worktree',
   }[action]
   return invoke(command, { request })
+}
+
+export async function workflowCreatePullRequest(
+  projectPath: string,
+  issueId: string,
+): Promise<WorkflowCreatePullRequestResponse> {
+  if (isTauri()) {
+    return invoke<WorkflowCreatePullRequestResponse>('workflow_create_pull_request', {
+      request: { projectPath, issueId },
+    })
+  }
+  throw new Error('Workflow PR creation is only available in the desktop app')
 }
 
 export async function discoverProjectWorktrees(projectPath: string): Promise<ProjectWorktree[]> {

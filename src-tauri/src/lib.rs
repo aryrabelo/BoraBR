@@ -3849,6 +3849,29 @@ pub struct AutoModeRunActionResponse {
     pub run: AutoModeRunRecord,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowPullRequestAction {
+    pub issue_id: String,
+    pub branch: String,
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowCreatePullRequestRequest {
+    pub project_path: String,
+    pub issue_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowCreatePullRequestResponse {
+    pub pull_request_url: String,
+    pub branch: String,
+}
+
 fn now_rfc3339_string() -> String {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -4034,6 +4057,93 @@ fn auto_mode_branch_for_path(path: &str, fallback: &str) -> String {
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
         .filter(|branch| !branch.is_empty())
         .unwrap_or_else(|| fallback.to_string())
+}
+
+fn extract_step_handoff_json(comment: &str) -> Option<serde_json::Value> {
+    let trimmed = comment.trim();
+    if !trimmed.starts_with("step:") {
+        return None;
+    }
+    let json_start = trimmed.find('{')?;
+    serde_json::from_str(&trimmed[json_start..]).ok()
+}
+
+fn latest_workflow_handoff_value(comments: &[String]) -> Option<serde_json::Value> {
+    comments.iter().rev().find_map(|comment| extract_step_handoff_json(comment))
+}
+
+fn json_string_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn json_string_array_field(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn build_workflow_pull_request_action(
+    issue_id: &str,
+    issue_title: &str,
+    parent_title: Option<&str>,
+    comments: &[String],
+) -> Option<WorkflowPullRequestAction> {
+    let handoff = latest_workflow_handoff_value(comments)?;
+    let branch = json_string_field(&handoff, "branch")?;
+    let commit = json_string_field(&handoff, "commit");
+    let files = json_string_array_field(&handoff, "files");
+    let title = parent_title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(issue_title)
+        .to_string();
+    let mut body = format!("Shared branch evidence for {}", issue_id);
+    if let Some(commit) = commit {
+        body.push_str(&format!("\n\nLatest handoff commit: {}", commit));
+    }
+    if !files.is_empty() {
+        body.push_str("\nChanged files:\n");
+        body.push_str(&files.iter().map(|file| format!("- {}", file)).collect::<Vec<_>>().join("\n"));
+    }
+
+    Some(WorkflowPullRequestAction {
+        issue_id: issue_id.to_string(),
+        branch,
+        title,
+        body,
+    })
+}
+
+fn workflow_issue_from_project(project_path: &str, issue_id: &str) -> Result<BdRawIssue, String> {
+    let output = execute_bd("show", &[issue_id.to_string()], Some(project_path))?;
+    let issues = parse_issues_tolerant(&output, "workflow_create_pr_show")?;
+    issues
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("Issue not found: {}", issue_id))
+}
+
+fn workflow_parent_title(project_path: &str, parent_id: Option<&str>) -> Option<String> {
+    let parent_id = parent_id?;
+    workflow_issue_from_project(project_path, parent_id)
+        .ok()
+        .map(|issue| issue.title)
+        .filter(|title| !title.trim().is_empty())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -4847,6 +4957,71 @@ async fn auto_mode_open_worktree(request: AutoModeRunActionRequest) -> Result<()
             .map_err(|e| format!("Failed to open worktree: {}", e))?;
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn workflow_create_pull_request(
+    request: WorkflowCreatePullRequestRequest,
+) -> Result<WorkflowCreatePullRequestResponse, String> {
+    let project_root = auto_mode_resolve_project_root(&request.project_path);
+    let raw_issue = workflow_issue_from_project(&project_root, &request.issue_id)?;
+    let comments = raw_issue
+        .comments
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|comment| comment.content.or(comment.text).unwrap_or_default())
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>();
+    let parent_title = workflow_parent_title(&project_root, raw_issue.parent.as_deref());
+    let action = build_workflow_pull_request_action(
+        &raw_issue.id,
+        &raw_issue.title,
+        parent_title.as_deref(),
+        &comments,
+    ).ok_or_else(|| "No structured workflow handoff with a branch was found".to_string())?;
+    let base_branch = auto_mode_project_base_branch(&project_root).unwrap_or_else(|| "master".to_string());
+
+    let output = new_command("gh")
+        .args([
+            "pr",
+            "create",
+            "--base",
+            &base_branch,
+            "--head",
+            &action.branch,
+            "--title",
+            &action.title,
+            "--body",
+            &action.body,
+        ])
+        .current_dir(&project_root)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to run gh pr create: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("gh pr create failed: {}", stderr));
+    }
+
+    let pull_request_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let comment = format!(
+        "step:create-pr {{\"branch\":\"{}\",\"prUrl\":\"{}\",\"files\":[]}}",
+        action.branch,
+        pull_request_url,
+    );
+    let _ = execute_bd(
+        "comments add",
+        &[request.issue_id.clone(), comment],
+        Some(&project_root),
+    );
+    let _ = execute_bd("sync", &["--flush-only".to_string()], Some(&project_root));
+
+    Ok(WorkflowCreatePullRequestResponse {
+        pull_request_url,
+        branch: action.branch,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -8446,6 +8621,7 @@ pub fn run() {
             auto_mode_run_cancel,
             auto_mode_run_cleanup,
             auto_mode_open_worktree,
+            workflow_create_pull_request,
             auto_mode_cancel_task,
             terminal_native_renderer_capabilities,
             terminal_open_native_renderer,
@@ -9248,6 +9424,26 @@ prunable gitdir file points to non-existent location
             auto_mode_run_phase_after_issue_event("reviewing", &[changes.to_string()]),
             ("review_changes_requested".to_string(), Some("Review requested changes".to_string()), Some(changes.to_string())),
         );
+    }
+
+    #[test]
+    fn workflow_pr_action_uses_latest_handoff_branch() {
+        let comments = vec![
+            "step:implement {\"branch\":\"epic/borabr-old\",\"commit\":\"aaa\",\"files\":[\"old.ts\"]}".to_string(),
+            "step:verify {\"branch\":\"epic/borabr-ua3\",\"commit\":\"bbb\",\"files\":[\"app/pages/index.vue\"]}".to_string(),
+        ];
+        let action = build_workflow_pull_request_action(
+            "borabr-ua3.7",
+            "Epic branch strategy",
+            Some("Workflow Step Handoff"),
+            &comments,
+        ).expect("workflow PR action");
+
+        assert_eq!(action.branch, "epic/borabr-ua3");
+        assert_eq!(action.title, "Workflow Step Handoff");
+        assert!(action.body.contains("Shared branch evidence for borabr-ua3.7"));
+        assert!(action.body.contains("Latest handoff commit: bbb"));
+        assert!(action.body.contains("- app/pages/index.vue"));
     }
 
     #[test]

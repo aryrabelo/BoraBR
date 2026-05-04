@@ -12,3 +12,6 @@
 {"timestamp":"2026-05-04T15:46:06.996Z","issueId":"borabr-tnf.1","eventType":"dispatch_success","detail":"Running on workspace:51, branch epic/borabr-tnf","surface":"workspace:51"}
 {"timestamp":"2026-05-04T16:18:25.182Z","issueId":"-","eventType":"enabled","detail":"Auto-mode enabled for /Users/aryrabelo/Sites/beads-task-issue-tracker"}
 {"timestamp":"2026-05-04T16:18:29.833Z","issueId":"-","eventType":"disabled","detail":"Auto-mode disabled"}
+{"timestamp":"2026-05-04T16:47:30.268Z","issueId":"borabr-tnf.1","eventType":"dispatch_start","detail":"Dispatching: Polish app header typography for auto-mode smoke-test"}
+{"timestamp":"2026-05-04T16:47:30.268Z","issueId":"-","eventType":"enabled","detail":"Auto-mode enabled for /Users/aryrabelo/Sites/beads-task-issue-tracker"}
+{"timestamp":"2026-05-04T16:47:31.550Z","issueId":"borabr-tnf.1","eventType":"dispatch_success","detail":"Running on workspace:53, branch epic/borabr-tnf","surface":"workspace:53"}

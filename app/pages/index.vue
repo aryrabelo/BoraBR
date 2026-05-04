@@ -48,11 +48,13 @@ import { Bell, ArrowLeft, Copy, SquareTerminal } from 'lucide-vue-next'
 import {
   autoModeRunAction,
   autoModeTick,
+  bdShow,
   cmuxFocusSurface,
   cmuxSendPrompt,
   listAutoModeRuns,
   listActionCenterLinearIssues,
   listProjectGitHubPullRequests,
+  workflowCreatePullRequest,
   type ActionCenterGitHubPullRequest,
   type ActionCenterLinearIssue,
   type AutoModeRunRecord,
@@ -60,6 +62,7 @@ import {
 import { resolveTaskTerminalSource } from '~/utils/task-terminal-source'
 import { getFolderName } from '~/utils/path'
 import { openUrl } from '~/utils/open-url'
+import { buildWorkflowPullRequestAction, type WorkflowPullRequestAction } from '~/utils/workflow-handoff'
 import {
   buildActionCenterGitHubPullRequestState,
   buildActionCenterIssuePrompt,
@@ -249,6 +252,7 @@ interface ActionCenterIssueItem extends Issue {
   projectPath: string
   projectName: string
   cmuxSurfaceId?: string
+  workflowPullRequestAction?: WorkflowPullRequestAction | null
   actionSource: ActionCenterSource
   actionSourceLabel: string
   actionTimestamp: number
@@ -400,6 +404,7 @@ const readyActionItems = computed<ActionCenterIssueItem[]>(() => {
           projectPath: projectState.projectPath,
           projectName: projectState.projectName,
           cmuxSurfaceId: getIssueCmuxSurfaceId(issue) ?? projectState.cmuxSurfaceId,
+          workflowPullRequestAction: buildWorkflowPullRequestAction(issue),
           actionSource,
           actionSourceLabel: actionSourceLabel[actionSource],
           actionTimestamp: parseActionDate(issue),
@@ -544,6 +549,18 @@ const projectIdleActionItems = computed<ActionCenterProjectIdleItem[]>(() => {
       actionTimestamp: state.idleSince + PROJECT_IDLE_THRESHOLD_MS,
     }))
 })
+
+const enrichActionCenterReadyIssues = async (readyIssues: Issue[], projectPath: string) => {
+  const enriched: Issue[] = []
+  for (const issue of readyIssues.slice(0, 10)) {
+    try {
+      enriched.push(await bdShow(issue.id, projectPath) ?? issue)
+    } catch {
+      enriched.push(issue)
+    }
+  }
+  return enriched
+}
 
 const actionCenterItems = computed<ActionCenterItem[]>(() => {
   const items = [
@@ -725,7 +742,7 @@ const refreshProjectIdleNotifications = async () => {
         const projectIssues = await bdList({ path: project.path, includeAll: true })
         nextAutoModeRunStates[projectKey] = await listAutoModeRuns(project.path)
         const hasInProgressWork = projectIssues.some(issue => issue.status === 'in_progress')
-        const projectReadyIssues = hasInProgressWork ? [] : await bdReady(project.path)
+        const projectReadyIssues = hasInProgressWork ? [] : await enrichActionCenterReadyIssues(await bdReady(project.path), project.path)
         const actionState = buildActionCenterProjectActionState({
           projectPath: project.path,
           projectName: project.name,
@@ -1068,6 +1085,21 @@ const handleAutoModeRunAction = async (item: ActionCenterAutoModeRunItem, action
       await refreshAutoModeRunState(item.projectPath)
     }
     notifySuccess(`${autoModeRunActionLabel[action]} executado`)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    actionCenterTerminalError.value = message
+    notifyError(message)
+  }
+}
+
+const handleCreateWorkflowPullRequest = async (item: ActionCenterIssueItem) => {
+  actionCenterTerminalError.value = ''
+  actionCenterTerminalErrorItemId.value = item.actionId
+
+  try {
+    const response = await workflowCreatePullRequest(item.projectPath, item.id)
+    await refreshAutoModeRunState(item.projectPath).catch(() => {})
+    notifySuccess('PR criado', response.pullRequestUrl || response.branch)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     actionCenterTerminalError.value = message
@@ -1784,6 +1816,15 @@ watch(
                                 <SquareTerminal class="h-3.5 w-3.5" />
                                 Rodar no CMUX
                               </Button>
+                              <Button
+                                v-if="action.actionKind === 'issue' && action.workflowPullRequestAction"
+                                variant="secondary"
+                                size="sm"
+                                class="h-7 text-xs"
+                                @click="handleCreateWorkflowPullRequest(action)"
+                              >
+                                Create PR
+                              </Button>
                               <Button variant="outline" size="sm" class="h-7 text-xs" @click="handleSnoozeActionItem(action)">
                                 Daqui 10 min
                               </Button>
@@ -2145,6 +2186,15 @@ watch(
                           >
                             <SquareTerminal class="h-3.5 w-3.5" />
                             Rodar no CMUX
+                          </Button>
+                          <Button
+                            v-if="action.actionKind === 'issue' && action.workflowPullRequestAction"
+                            variant="secondary"
+                            size="sm"
+                            class="h-7 text-xs"
+                            @click="handleCreateWorkflowPullRequest(action)"
+                          >
+                            Create PR
                           </Button>
                           <Button variant="outline" size="sm" class="h-7 text-xs" @click="handleSnoozeActionItem(action)">
                             Daqui 10 min
