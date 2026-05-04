@@ -95,7 +95,7 @@
     "updatedAt": "1777919643375"
   },
   {
-    "runId": "borabr-tnf-1-1777921814974",
+    "runId": "borabr-tnf-1-1777924286231",
     "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
     "projectName": "beads-task-issue-tracker",
     "baseBranch": "master",
@@ -110,7 +110,7 @@
     "lastEvent": "Executor complete",
     "error": null,
     "attempts": 1,
-    "surface": "workspace:64",
-    "updatedAt": "1777921879462"
+    "surface": "workspace:66",
+    "updatedAt": "1777924341093"
   }
 ]

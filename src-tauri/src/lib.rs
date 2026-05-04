@@ -4137,6 +4137,10 @@ fn auto_mode_preexisting_executor_complete_run(
     scope: &AutoModeDispatchScope,
     base_branch: Option<String>,
 ) -> Option<AutoModeDispatchResponse> {
+    if raw_issue.status == "open" {
+        return None;
+    }
+
     let comments = auto_mode_issue_active_comment_texts(raw_issue);
     if extract_auto_mode_executor_commit(&comments, None).is_none() {
         return None;
@@ -4501,12 +4505,10 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     };
 
     // 5. Send Claude command for the selected dispatch scope.
-    let fresh_command = build_auto_mode_agent_command(epic_id, issue_id, &request.issue_title, &workspace_ref, &run_id);
-    let orchestrator_command = if reused_workspace {
-        build_auto_mode_resume_command(&worktree_dir).unwrap_or(fresh_command)
-    } else {
-        fresh_command
-    };
+    let orchestrator_command = build_auto_mode_agent_command(epic_id, issue_id, &request.issue_title, &workspace_ref, &run_id);
+    if reused_workspace {
+        log::info!("[auto-mode] Reusing workspace {} with a fresh executor prompt", workspace_ref);
+    }
     let cmux_send_args = vec![
         "send".to_string(),
         "--workspace".to_string(), workspace_ref.clone(),
@@ -9557,7 +9559,7 @@ prunable gitdir file points to non-existent location
             "id": "borabr-tnf.1",
             "title": "Header polish",
             "description": null,
-            "status": "open",
+            "status": "in_progress",
             "priority": 0,
             "issue_type": "task",
             "owner": null,
@@ -9593,6 +9595,47 @@ prunable gitdir file points to non-existent location
         assert_eq!(response.surface, "workspace:53");
         assert_eq!(response.branch, "epic/borabr-tnf");
         assert_eq!(response.worktree_path, "/tmp/borabr-missing-project");
+    }
+
+    #[test]
+    fn dispatch_preflight_does_not_reuse_completed_evidence_for_open_issue() {
+        let issue: BdRawIssue = serde_json::from_value(serde_json::json!({
+            "id": "borabr-tnf.1",
+            "title": "Header polish",
+            "description": null,
+            "status": "open",
+            "priority": 0,
+            "issue_type": "task",
+            "owner": null,
+            "assignee": "cmux:workspace:64",
+            "labels": [],
+            "created_at": "2026-05-04T00:00:00Z",
+            "created_by": "assistant",
+            "updated_at": "2026-05-04T19:38:21Z",
+            "comments": [{
+                "id": 73,
+                "issue_id": "borabr-tnf.1",
+                "author": "auto-mode",
+                "text": "AUTO_MODE_RUN_ID: old-run\nEXECUTOR_COMPLETE\ncommit: 0d2fcb0\nbranch: epic/borabr-tnf\nsummary: stale",
+                "content": null,
+                "created_at": "2026-05-04T19:11:16Z"
+            }]
+        })).expect("raw issue");
+        let request = AutoModeDispatchRequest {
+            project_path: "/tmp/borabr-missing-project".to_string(),
+            issue_id: "borabr-tnf.1".to_string(),
+            issue_title: "Header polish".to_string(),
+        };
+        let scope = auto_mode_dispatch_scope("borabr-tnf", "borabr-tnf.1");
+
+        assert!(auto_mode_preexisting_executor_complete_run(
+            "/tmp/borabr-missing-project",
+            "borabr-tnf",
+            &request,
+            &issue,
+            &scope,
+            Some("master".to_string()),
+        ).is_none());
     }
 
     #[test]
