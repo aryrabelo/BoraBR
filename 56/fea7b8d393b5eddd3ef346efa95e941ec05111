@@ -1,0 +1,31 @@
+.beads/auto-mode-log.jsonl
+  01707aec1acd73f5 21-28
+.beads/auto-mode-runs.json
+  01707aec1acd73f5 17-72
+src-tauri/src/lib.rs
+  01707aec1acd73f5 3738,3766-3767,3936-3939,4287-4290,4885-4891,9391,9394-9395,9400-9401,9403-9405,9523-9544
+.beads/issues.jsonl
+  01707aec1acd73f5 5-8,34
+app/components/issues/IssueTable.vue
+  01707aec1acd73f5 74-78,664-670
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "56fea7b8d393b5eddd3ef346efa95e941ec05111",
+  "prompts": {
+    "01707aec1acd73f5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019df3c7-c9d0-7062-ad5b-3500284b4536",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 143,
+      "total_deletions": 52,
+      "accepted_lines": 135,
+      "overriden_lines": 0
+    }
+  }
+}
