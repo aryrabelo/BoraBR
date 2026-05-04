@@ -3689,15 +3689,52 @@ fn auto_mode_dispatch_scope(epic_id: &str, issue_id: &str) -> AutoModeDispatchSc
     }
 }
 
+fn find_latest_claude_session_id(worktree_path: &str) -> Option<String> {
+    let sanitized = worktree_path.replace('/', "-");
+    let trimmed = sanitized.trim_start_matches('-');
+    let sessions_dir = dirs::home_dir()?.join(".claude").join("projects").join(trimmed);
+
+    if !sessions_dir.is_dir() {
+        log::info!("[session-resume] No Claude sessions dir at {}", sessions_dir.display());
+        return None;
+    }
+
+    let mut newest: Option<(String, std::time::SystemTime)> = None;
+    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".jsonl") {
+                let session_id = name.trim_end_matches(".jsonl").to_string();
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if newest.as_ref().map_or(true, |(_, t)| modified > *t) {
+                            newest = Some((session_id, modified));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some((id, _)) = &newest {
+        log::info!("[session-resume] Found latest session {} for {}", id, worktree_path);
+    }
+    newest.map(|(id, _)| id)
+}
+
+fn build_auto_mode_resume_command(worktree_path: &str) -> Option<String> {
+    let session_id = find_latest_claude_session_id(worktree_path)?;
+    Some(format!("claude --resume {}", shell_single_quote(&session_id)))
+}
+
 fn build_auto_mode_executor_command(
-    epic_id: &str,
+    _epic_id: &str,
     issue_id: &str,
-    issue_title: &str,
-    cmux_ref: &str,
+    _issue_title: &str,
+    _cmux_ref: &str,
 ) -> String {
-    let assignee = format!("cmux:{}", cmux_ref);
     let prompt = format!(
-        "You are an executor for Beads task {issue_id} in epic {epic_id}. Task title: {issue_title}. This cmux workspace is {cmux_ref}; use BR assignee {assignee}. First run `br show {issue_id}`. Then claim/focus the task with `br update {issue_id} --status in_progress --assignee {assignee} --json`, implement only this task, run relevant tests, commit atomically on branch `task-{issue_id}`, and signal completion with a structured comment containing the commit hash. Do not work unrelated tasks and do not touch main directly.",
+        "Read .claude/auto-mode-prompt.md and follow the instructions exactly. You are executing a SINGLE task only: {issue_id}. Run `br show {issue_id} --json` first, then claim it with `br update --actor auto-mode {issue_id} --status in_progress --claim --json`. Implement the task, run tests, commit, then close with `br close --actor auto-mode {issue_id} --reason \"<what you did>\"` and `br sync --flush-only`. Do NOT loop or pick other tasks.",
     );
 
     format!("claude {}", shell_single_quote(&prompt))
@@ -3705,7 +3742,7 @@ fn build_auto_mode_executor_command(
 
 fn build_auto_mode_epic_orchestrator_command(epic_id: &str) -> String {
     let prompt = format!(
-        "You are an orchestrator for Beads epic {epic_id}. Loop until no open ready child tasks remain. 1) Run `br ready --json` and filter to non-epic child tasks whose id starts with `{epic_id}.`; if you need the full open set, run `br list --json | jq '(.issues? // .)[] | select(.id | startswith(\"{epic_id}.\")) | select(.status==\"open\") | select(.issue_type!=\"epic\")'`. 2) Pick the highest-priority ready task; when multiple ready tasks have no dependencies, dispatch them in parallel with separate cmux workspaces and git worktrees named `task-<issue-id>` on branches `task-<issue-id>`. 3) Spawn a separate Claude executor per task with issue context; executors must claim, implement, test, commit atomically, add a structured executor-complete comment containing the commit hash, and avoid touching main directly. 4) After each executor completion signal, spawn an independent Claude reviewer with fresh context. The reviewer must run relevant tests/type-check/build, review the diff against `br show <issue-id>`, and produce a structured approve/request-changes verdict comment. 5) If review approves, merge the task branch into main. If merge conflicts or fails, abort the merge, report the conflict, and keep the worktree and issue open. If merge succeeds, remove the task worktree, delete the task branch when safe, close the BR issue, and run `br sync --flush-only`. If review requests changes, report findings back and keep the worktree and issue open for retry. Use agents for parallel work when dependencies allow.",
+        "Read .claude/auto-mode-prompt.md and follow the instructions exactly. Replace EPIC_ID with {epic_id}. The br CLI is your issue tracker — use `br` (never `bd`). Always pass `--actor auto-mode` and `--json` flags. Loop through all open tasks in the epic, claim each before working, close each when done with evidence. Do NOT skip the claim or close steps.",
     );
 
     format!("claude {}", shell_single_quote(&prompt))
@@ -8581,7 +8618,7 @@ prunable gitdir file points to non-existent location
     }
 
     #[test]
-    fn auto_mode_orchestrator_command_launches_claude_for_selected_task() {
+    fn auto_mode_executor_command_references_prompt_file_and_task() {
         let command = build_auto_mode_agent_command(
             "borabr-unf",
             "borabr-unf.7",
@@ -8590,17 +8627,15 @@ prunable gitdir file points to non-existent location
         );
 
         assert!(command.starts_with("claude "));
-        assert!(command.contains("Beads task borabr-unf.7"));
-        assert!(command.contains("epic borabr-unf"));
+        assert!(command.contains(".claude/auto-mode-prompt.md"));
+        assert!(command.contains("borabr-unf.7"));
         assert!(command.contains("br show borabr-unf.7"));
-        assert!(command.contains("cmux:workspace:42"));
-        assert!(command.contains("br update borabr-unf.7 --status in_progress --assignee cmux:workspace:42 --json"));
-        assert!(command.contains("branch `task-borabr-unf.7`"));
-        assert!(!command.contains("br list --json"));
+        assert!(command.contains("br close --actor auto-mode borabr-unf.7"));
+        assert!(command.contains("Do NOT loop"));
     }
 
     #[test]
-    fn auto_mode_orchestrator_command_loops_review_and_merge_for_epic_dispatch() {
+    fn auto_mode_epic_orchestrator_references_prompt_file() {
         let command = build_auto_mode_agent_command(
             "borabr-unf",
             "borabr-unf",
@@ -8609,21 +8644,24 @@ prunable gitdir file points to non-existent location
         );
 
         assert!(command.starts_with("claude "));
-        assert!(command.contains("orchestrator for Beads epic borabr-unf"));
-        assert!(command.contains("br ready --json"));
-        assert!(command.contains("(.issues? // .)[]"));
-        assert!(command.contains("highest-priority ready task"));
-        assert!(command.contains("parallel"));
-        assert!(command.contains("separate Claude executor"));
-        assert!(command.contains("executor-complete comment"));
-        assert!(command.contains("independent Claude reviewer"));
-        assert!(command.contains("tests/type-check/build"));
-        assert!(command.contains("approve/request-changes verdict"));
-        assert!(command.contains("merge the task branch into main"));
-        assert!(command.contains("abort the merge"));
-        assert!(command.contains("remove the task worktree"));
-        assert!(command.contains("delete the task branch when safe"));
-        assert!(command.contains("br sync --flush-only"));
+        assert!(command.contains(".claude/auto-mode-prompt.md"));
+        assert!(command.contains("borabr-unf"));
+        assert!(command.contains("--actor auto-mode"));
+        assert!(command.contains("--json"));
+        assert!(command.contains("claim"));
+        assert!(command.contains("close"));
+    }
+
+    #[test]
+    fn find_latest_claude_session_id_returns_none_for_nonexistent_path() {
+        let result = find_latest_claude_session_id("/nonexistent/worktree/path");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn build_auto_mode_resume_command_returns_none_for_nonexistent_path() {
+        let result = build_auto_mode_resume_command("/nonexistent/worktree/path");
+        assert!(result.is_none());
     }
 
     #[test]
