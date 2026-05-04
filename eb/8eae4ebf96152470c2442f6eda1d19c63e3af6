@@ -1,0 +1,41 @@
+.beads/issues.jsonl
+  ea860a8ae196e53d 1-54
+tests/composables/useAutoMode.test.ts
+  ea860a8ae196e53d 4,72-122
+.beads/workflows/bug-investigation.json
+  ea860a8ae196e53d 1-30
+src-tauri/src/lib.rs
+  ea860a8ae196e53d 3674-3675,3678-3679,3685-3686,3762,3968,3983,4014-4019,8676,8678-8679,8684-8685,8780
+.beads/config.yaml
+  ea860a8ae196e53d 1-4
+.beads/workflows/planning-approval.json
+  ea860a8ae196e53d 1-37
+.beads/.gitignore
+  ea860a8ae196e53d 1-40
+.beads/metadata.json
+  ea860a8ae196e53d 1-4
+app/composables/useAutoMode.ts
+  ea860a8ae196e53d 66-71,75,110-140,393-416,418
+app/pages/index.vue
+  ea860a8ae196e53d 123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "eb8eae4ebf96152470c2442f6eda1d19c63e3af6",
+  "prompts": {
+    "ea860a8ae196e53d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019df331-b3fa-7462-974f-197def209228",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 775,
+      "total_deletions": 17,
+      "accepted_lines": 769,
+      "overriden_lines": 2
+    }
+  }
+}
