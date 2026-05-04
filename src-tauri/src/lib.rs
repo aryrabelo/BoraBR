@@ -4059,6 +4059,88 @@ fn auto_mode_branch_for_path(path: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
+fn auto_mode_issue_comment_texts(issue: &BdRawIssue) -> Vec<String> {
+    issue
+        .comments
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|comment| comment.content.or(comment.text).unwrap_or_default())
+        .filter(|content| !content.is_empty())
+        .collect()
+}
+
+fn auto_mode_surface_from_assignee(assignee: Option<&str>) -> Option<String> {
+    assignee
+        .and_then(|value| value.strip_prefix("cmux:"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn auto_mode_existing_worktree_target(
+    project_path: &str,
+    issue_id: &str,
+    scope: &AutoModeDispatchScope,
+) -> (String, String, String) {
+    if let Some(wt_worktree) = auto_mode_wt_get(project_path, issue_id) {
+        let branch = auto_mode_branch_for_path(&wt_worktree, &scope.branch);
+        return ("wt".to_string(), wt_worktree, branch);
+    }
+
+    let worktrees_parent = std::path::Path::new(project_path).join("../worktrees");
+    let worktree_path = worktrees_parent
+        .canonicalize()
+        .ok()
+        .map(|parent| parent.join(&scope.worktree_name))
+        .filter(|path| path.exists())
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| project_path.to_string());
+    let branch = auto_mode_branch_for_path(&worktree_path, &scope.branch);
+    ("gitWorktree".to_string(), worktree_path, branch)
+}
+
+fn auto_mode_preexisting_executor_complete_run(
+    project_path: &str,
+    epic_id: &str,
+    request: &AutoModeDispatchRequest,
+    raw_issue: &BdRawIssue,
+    scope: &AutoModeDispatchScope,
+    base_branch: Option<String>,
+) -> Option<AutoModeDispatchResponse> {
+    let comments = auto_mode_issue_comment_texts(raw_issue);
+    if extract_auto_mode_executor_commit(&comments).is_none() {
+        return None;
+    }
+
+    let (provider, worktree_path, branch) = auto_mode_existing_worktree_target(project_path, &request.issue_id, scope);
+    let surface = auto_mode_surface_from_assignee(raw_issue.assignee.as_deref()).unwrap_or_default();
+    let _ = upsert_auto_mode_run(project_path, AutoModeRunRecord {
+        project_path: project_path.to_string(),
+        project_name: std::path::Path::new(project_path).file_name().map(|name| name.to_string_lossy().to_string()),
+        base_branch,
+        issue_id: request.issue_id.clone(),
+        issue_title: request.issue_title.clone(),
+        epic_id: Some(epic_id.to_string()),
+        epic_title: None,
+        provider,
+        branch: branch.clone(),
+        worktree_path: worktree_path.clone(),
+        phase: "executor_complete".to_string(),
+        last_event: Some("Executor already complete".to_string()),
+        error: None,
+        attempts: 1,
+        surface: if surface.is_empty() { None } else { Some(surface.clone()) },
+        updated_at: Some(now_rfc3339_string()),
+    });
+
+    Some(AutoModeDispatchResponse {
+        surface,
+        worktree_path,
+        branch,
+    })
+}
+
 fn extract_step_handoff_json(comment: &str) -> Option<serde_json::Value> {
     let trimmed = comment.trim();
     if !trimmed.starts_with("step:") {
@@ -4207,6 +4289,22 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     let git_root = auto_mode_resolve_project_root(&request.project_path);
     let project_path = &git_root;
     let base_branch = auto_mode_project_base_branch(project_path);
+    let raw_issue = workflow_issue_from_project(project_path, issue_id)?;
+
+    if raw_issue.status == "closed" {
+        return Err(format!("auto-mode dispatch blocked: {} is already closed", issue_id));
+    }
+
+    if let Some(response) = auto_mode_preexisting_executor_complete_run(
+        project_path,
+        epic_id,
+        &request,
+        &raw_issue,
+        &scope,
+        base_branch.clone(),
+    ) {
+        return Ok(response);
+    }
 
     if project_has_in_progress_auto_mode_task(project_path)? {
         return Err("auto-mode dispatch blocked: project already has in-progress work".to_string());
@@ -9444,6 +9542,50 @@ prunable gitdir file points to non-existent location
         assert!(action.body.contains("Shared branch evidence for borabr-ua3.7"));
         assert!(action.body.contains("Latest handoff commit: bbb"));
         assert!(action.body.contains("- app/pages/index.vue"));
+    }
+
+    #[test]
+    fn dispatch_preflight_converts_existing_executor_complete_to_durable_run() {
+        let issue: BdRawIssue = serde_json::from_value(serde_json::json!({
+            "id": "borabr-tnf.1",
+            "title": "Header polish",
+            "description": null,
+            "status": "open",
+            "priority": 0,
+            "issue_type": "task",
+            "owner": null,
+            "assignee": "cmux:workspace:53",
+            "labels": [],
+            "created_at": "2026-05-04T00:00:00Z",
+            "created_by": "assistant",
+            "updated_at": "2026-05-04T00:00:00Z",
+            "comments": [{
+                "id": 47,
+                "issue_id": "borabr-tnf.1",
+                "author": "assistant",
+                "text": "EXECUTOR_COMPLETE\ncommit: 0d2fcb0\nbranch: epic/borabr-tnf\nsummary: done",
+                "content": null,
+                "created_at": "2026-05-04T00:00:00Z"
+            }]
+        })).expect("raw issue");
+        let request = AutoModeDispatchRequest {
+            project_path: "/tmp/borabr-missing-project".to_string(),
+            issue_id: "borabr-tnf.1".to_string(),
+            issue_title: "Header polish".to_string(),
+        };
+        let scope = auto_mode_dispatch_scope("borabr-tnf", "borabr-tnf.1");
+        let response = auto_mode_preexisting_executor_complete_run(
+            "/tmp/borabr-missing-project",
+            "borabr-tnf",
+            &request,
+            &issue,
+            &scope,
+            Some("master".to_string()),
+        ).expect("preexisting executor complete response");
+
+        assert_eq!(response.surface, "workspace:53");
+        assert_eq!(response.branch, "epic/borabr-tnf");
+        assert_eq!(response.worktree_path, "/tmp/borabr-missing-project");
     }
 
     #[test]
