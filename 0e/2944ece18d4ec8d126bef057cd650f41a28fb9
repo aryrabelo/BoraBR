@@ -1,0 +1,51 @@
+.beads/auto-mode-runs.json
+  01707aec1acd73f5 1-20
+tests/utils/workflow-handoff.test.ts
+  01707aec1acd73f5 4,69-86
+  409999712b42d3ae 87
+.beads/issues.jsonl
+  01707aec1acd73f5 26,32
+app/utils/workflow-handoff.ts
+  01707aec1acd73f5 2,18-25,106-128
+.beads/auto-mode-log.jsonl
+  01707aec1acd73f5 15-17
+src-tauri/src/lib.rs
+  01707aec1acd73f5 3852-3874,4062-4148,4962-5026,8624,9429-9448
+app/utils/bd-api.ts
+  01707aec1acd73f5 129-133,256-265
+app/pages/index.vue
+  01707aec1acd73f5 51,57,65,255,407,553-564,745,1095-1109,1819-1827,2190-2197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "0e2944ece18d4ec8d126bef057cd650f41a28fb9",
+  "prompts": {
+    "01707aec1acd73f5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019df3c7-c9d0-7062-ad5b-3500284b4536",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 2853,
+      "total_deletions": 2513,
+      "accepted_lines": 985,
+      "overriden_lines": 0
+    },
+    "409999712b42d3ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c05fc124-a31e-4b30-b3e2-473200506ab9",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ary Rabelo",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 55,
+      "overriden_lines": 0
+    }
+  }
+}
