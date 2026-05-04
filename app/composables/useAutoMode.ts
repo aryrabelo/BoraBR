@@ -223,8 +223,8 @@ export function useAutoMode(
     }
   }
 
-  async function dispatchTask(issue: Issue) {
-    if (isDispatching.value) return
+  async function dispatchTask(issue: Issue): Promise<boolean> {
+    if (isDispatching.value) return false
 
     const task: AutoModeTask = {
       issueId: issue.id,
@@ -256,12 +256,14 @@ export function useAutoMode(
       logFrontend('info', `[auto-mode] Task ${issue.id} running on surface ${result.surface}`)
       logEvent('dispatch_success', issue.id, `Running on ${result.surface}, branch ${result.branch}`, { surface: result.surface })
       lastDispatchAt.value = Date.now()
+      return true
     } catch (e) {
       task.status = 'failed'
       task.error = String(e)
       activeTaskMap.value = new Map(activeTaskMap.value.set(issue.id, { ...task }))
       logFrontend('error', `[auto-mode] Failed to dispatch ${issue.id}: ${e}`)
       logEvent('dispatch_failed', issue.id, `Dispatch failed`, { error: String(e) })
+      return false
     } finally {
       isDispatching.value = false
     }
@@ -385,6 +387,7 @@ export function useAutoMode(
     hasRunningTask,
     isDispatching,
     canDispatch,
+    dispatchTask,
     cancelTask,
   }
 }

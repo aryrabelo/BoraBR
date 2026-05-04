@@ -1,23 +1,6 @@
 [
   {
-    "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
-    "projectName": "beads-task-issue-tracker",
-    "baseBranch": "master",
-    "issueId": "borabr-tnf.1",
-    "issueTitle": "Polish app header typography for auto-mode smoke-test",
-    "epicId": "borabr-tnf",
-    "epicTitle": null,
-    "provider": "gitWorktree",
-    "branch": "epic/borabr-tnf",
-    "worktreePath": "/Users/aryrabelo/Sites/worktrees/epic-borabr-tnf",
-    "phase": "review_approved",
-    "lastEvent": "Review approved",
-    "error": null,
-    "attempts": 1,
-    "surface": null,
-    "updatedAt": "1777921143233"
-  },
-  {
+    "runId": null,
     "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
     "projectName": "beads-task-issue-tracker",
     "baseBranch": "master",
@@ -36,6 +19,7 @@
     "updatedAt": "1777914885633"
   },
   {
+    "runId": null,
     "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
     "projectName": "beads-task-issue-tracker",
     "baseBranch": "master",
@@ -54,6 +38,7 @@
     "updatedAt": "1777918269023"
   },
   {
+    "runId": null,
     "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
     "projectName": "beads-task-issue-tracker",
     "baseBranch": "master",
@@ -72,6 +57,7 @@
     "updatedAt": "1777919638405"
   },
   {
+    "runId": null,
     "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
     "projectName": "beads-task-issue-tracker",
     "baseBranch": "master",
@@ -90,6 +76,7 @@
     "updatedAt": "1777919673611"
   },
   {
+    "runId": null,
     "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
     "projectName": "beads-task-issue-tracker",
     "baseBranch": "master",
@@ -106,5 +93,24 @@
     "attempts": 1,
     "surface": "workspace:63",
     "updatedAt": "1777919643375"
+  },
+  {
+    "runId": "borabr-tnf-1-1777921814974",
+    "projectPath": "/Users/aryrabelo/Sites/beads-task-issue-tracker",
+    "projectName": "beads-task-issue-tracker",
+    "baseBranch": "master",
+    "issueId": "borabr-tnf.1",
+    "issueTitle": "Polish app header typography for auto-mode smoke-test",
+    "epicId": "borabr-tnf",
+    "epicTitle": null,
+    "provider": "gitWorktree",
+    "branch": "epic/borabr-tnf",
+    "worktreePath": "/Users/aryrabelo/Sites/worktrees/epic-borabr-tnf",
+    "phase": "executor_complete",
+    "lastEvent": "Executor complete",
+    "error": null,
+    "attempts": 1,
+    "surface": "workspace:64",
+    "updatedAt": "1777921879462"
   }
 ]

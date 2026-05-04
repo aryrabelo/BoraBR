@@ -108,6 +108,7 @@ export type AutoModeRunPhase =
   | 'cancelled'
 
 export interface AutoModeRunRecord {
+  runId?: string | null
   projectPath: string
   projectName?: string | null
   baseBranch?: string | null

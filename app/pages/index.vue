@@ -128,7 +128,7 @@ const refreshAutoModeReadyIssues = async () => {
   }
   return readyData
 }
-const { enabled: autoModeEnabled, activeTaskList: autoModeTasks, isDispatching: autoModeDispatching, cancelTask: autoModeCancelTask } = useAutoMode(beadsPath, readyIssues, inProgressIssuesForAutoMode, {
+const { enabled: autoModeEnabled, activeTaskList: autoModeTasks, isDispatching: autoModeDispatching, dispatchTask: autoModeDispatchTask, cancelTask: autoModeCancelTask } = useAutoMode(beadsPath, readyIssues, inProgressIssuesForAutoMode, {
   refreshReady: refreshAutoModeReadyIssues,
   allIssues: issues,
 })
@@ -1300,12 +1300,13 @@ const handleAddIssue = () => {
 }
 
 const handleAutoDispatch = async (issue: Issue) => {
-  const { invoke } = await import('@tauri-apps/api/core')
   try {
-    await invoke('auto_mode_dispatch', {
-      request: { projectPath: beadsPath.value, issueId: issue.id, issueTitle: issue.title },
-    })
-    notifySuccess(`Dispatched ${issue.id} to cmux`)
+    const dispatched = await autoModeDispatchTask(issue)
+    if (dispatched) {
+      notifySuccess(`Dispatched ${issue.id} to cmux`)
+    } else {
+      notifyError(`Failed to dispatch ${issue.id}`)
+    }
   } catch (e) {
     notifyError(`Failed to dispatch: ${e}`)
   }

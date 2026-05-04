@@ -3733,9 +3733,10 @@ fn build_auto_mode_executor_command(
     issue_id: &str,
     _issue_title: &str,
     _cmux_ref: &str,
+    run_id: &str,
 ) -> String {
     let prompt = format!(
-        "You are executing a SINGLE task only: {issue_id}. Do NOT read .claude/auto-mode-prompt.md; that file is only for the deprecated epic orchestrator. Run `br show {issue_id} --json` first. The BoraBR controller owns lifecycle state, review, PR creation, and closure. Implement the task, run tests, commit, then add durable executor evidence with `br comments add --actor auto-mode {issue_id} --message 'EXECUTOR_COMPLETE\\ncommit: <commit sha>\\nbranch: <branch>\\nsummary: <what you did and what passed>' --json` and `br sync --flush-only`. Do NOT close the issue. Do NOT loop or pick other tasks.",
+        "You are executing a SINGLE task only: {issue_id}. AUTO_MODE_RUN_ID: {run_id}. Do NOT read .claude/auto-mode-prompt.md; that file is only for the deprecated epic orchestrator. Run `br show {issue_id} --json` first. The BoraBR controller owns lifecycle state, review, PR creation, and closure. Implement the task, run tests, commit, then add durable executor evidence with `br comments add --actor auto-mode {issue_id} --message 'AUTO_MODE_RUN_ID: {run_id}\\nEXECUTOR_COMPLETE\\ncommit: <commit sha>\\nbranch: <branch>\\nsummary: <what you did and what passed>' --json` and `br sync --flush-only`. Do NOT close the issue. Do NOT loop or pick other tasks.",
     );
 
     format!("claude {}", shell_single_quote(&prompt))
@@ -3748,10 +3749,11 @@ fn build_auto_mode_reviewer_command(
     task_branch: &str,
     executor_commit: &str,
     cmux_ref: &str,
+    run_id: &str,
 ) -> String {
     let assignee = format!("cmux:{}", cmux_ref);
     let prompt = format!(
-        "You are an independent reviewer for Beads task {issue_id} in epic {epic_id}. Task title: {issue_title}. You have fresh context — no bias from the executor. Branch: `{task_branch}`, executor commit: {executor_commit}. Steps: 1) Run `br show {issue_id}` to understand requirements. 2) Run `git log --oneline master..{task_branch}` and `git diff master...{task_branch}` to see all changes. 3) Run quality gates: `pnpm test` and `npx vue-tsc --noEmit`. 4) Review the diff against the task requirements — check correctness, test coverage, no unrelated changes, no security issues. 5) Add a structured BR comment with your verdict: `br comments add --actor auto-mode {issue_id} --message 'REVIEW_VERDICT: APPROVED|CHANGES_REQUESTED\\nSummary: ...\\nFindings: ...' --json`. Use assignee {assignee}. If tests or type-check fail, verdict must be CHANGES_REQUESTED with failure details. Do not modify code — only validate and report.",
+        "You are an independent reviewer for Beads task {issue_id} in epic {epic_id}. AUTO_MODE_RUN_ID: {run_id}. Task title: {issue_title}. You have fresh context — no bias from the executor. Branch: `{task_branch}`, executor commit: {executor_commit}. Steps: 1) Run `br show {issue_id}` to understand requirements. 2) Run `git log --oneline master..{task_branch}` and `git diff master...{task_branch}` to see all changes. 3) Run quality gates: `pnpm test` and `npx vue-tsc --noEmit`. 4) Review the diff against the task requirements — check correctness, test coverage, no unrelated changes, no security issues. 5) Add a structured BR comment with your verdict: `br comments add --actor auto-mode {issue_id} --message 'AUTO_MODE_RUN_ID: {run_id}\\nREVIEW_VERDICT: APPROVED|CHANGES_REQUESTED\\nSummary: ...\\nFindings: ...' --json`. Use assignee {assignee}. If tests or type-check fail, verdict must be CHANGES_REQUESTED with failure details. Do not modify code — only validate and report.",
     );
 
     format!("claude {}", shell_single_quote(&prompt))
@@ -3762,9 +3764,10 @@ fn build_auto_mode_agent_command(
     issue_id: &str,
     issue_title: &str,
     cmux_ref: &str,
+    run_id: &str,
 ) -> String {
     debug_assert_ne!(issue_id, epic_id, "epic auto-mode dispatch is controller-owned");
-    build_auto_mode_executor_command(epic_id, issue_id, issue_title, cmux_ref)
+    build_auto_mode_executor_command(epic_id, issue_id, issue_title, cmux_ref, run_id)
 }
 
 fn mark_auto_mode_issue_dispatched(project_path: &str, issue_id: &str, cmux_ref: &str) -> Result<(), String> {
@@ -3801,6 +3804,7 @@ fn project_has_in_progress_auto_mode_task(project_path: &str) -> Result<bool, St
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoModeRunRecord {
+    pub run_id: Option<String>,
     pub project_path: String,
     pub project_name: Option<String>,
     pub base_branch: Option<String>,
@@ -3866,6 +3870,14 @@ fn now_rfc3339_string() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis().to_string())
         .unwrap_or_else(|_| "0".to_string())
+}
+
+fn new_auto_mode_run_id(issue_id: &str) -> String {
+    let safe_issue_id = issue_id
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    format!("{}-{}", safe_issue_id, now_rfc3339_string())
 }
 
 fn auto_mode_runs_path(project_path: &str) -> PathBuf {
@@ -3937,12 +3949,26 @@ fn is_auto_mode_epic_run(run: &AutoModeRunRecord) -> bool {
     run.epic_id.as_deref() == Some(run.issue_id.as_str())
 }
 
+fn auto_mode_comment_matches_run(comment: &str, run_id: Option<&str>) -> bool {
+    match run_id {
+        Some(run_id) => comment
+            .lines()
+            .any(|line| line.trim() == format!("AUTO_MODE_RUN_ID: {}", run_id)),
+        None => true,
+    }
+}
+
 fn auto_mode_run_phase_after_issue_event(
     phase: &str,
     comments: &[String],
+    run_id: Option<&str>,
 ) -> (String, Option<String>, Option<String>) {
     if phase == "executing" {
-        if comments.iter().rev().any(|comment| comment.contains("EXECUTOR_COMPLETE")) {
+        if comments
+            .iter()
+            .rev()
+            .any(|comment| comment.contains("EXECUTOR_COMPLETE") && auto_mode_comment_matches_run(comment, run_id))
+        {
             return (
                 "executor_complete".to_string(),
                 Some("Executor complete".to_string()),
@@ -3955,7 +3981,7 @@ fn auto_mode_run_phase_after_issue_event(
         if let Some(verdict) = comments
             .iter()
             .rev()
-            .find(|comment| comment.contains("REVIEW_VERDICT:"))
+            .find(|comment| comment.contains("REVIEW_VERDICT:") && auto_mode_comment_matches_run(comment, run_id))
         {
             if verdict.to_uppercase().contains("REVIEW_VERDICT: APPROVED") {
                 return (
@@ -3988,12 +4014,8 @@ fn auto_mode_issue_comments(project_path: &str, issue_id: &str) -> Vec<String> {
     };
     issues
         .first()
-        .and_then(|issue| issue.comments.clone())
+        .map(auto_mode_issue_active_comment_texts)
         .unwrap_or_default()
-        .into_iter()
-        .map(|comment| comment.content.or(comment.text).unwrap_or_default())
-        .filter(|content| !content.is_empty())
-        .collect()
 }
 
 fn auto_mode_resolve_project_root(project_path_raw: &str) -> String {
@@ -4052,13 +4074,27 @@ fn auto_mode_branch_for_path(path: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn auto_mode_issue_comment_texts(issue: &BdRawIssue) -> Vec<String> {
-    issue
-        .comments
-        .clone()
-        .unwrap_or_default()
+fn auto_mode_comment_content(comment: &BdRawComment) -> String {
+    comment.content.clone().or_else(|| comment.text.clone()).unwrap_or_default()
+}
+
+fn auto_mode_is_reset_comment(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    trimmed.starts_with("Reopened:") || trimmed.contains("AUTO_MODE_RESET")
+}
+
+fn auto_mode_issue_active_comment_texts(issue: &BdRawIssue) -> Vec<String> {
+    let comments = issue.comments.clone().unwrap_or_default();
+    let start = comments
+        .iter()
+        .rposition(|comment| auto_mode_is_reset_comment(&auto_mode_comment_content(comment)))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+
+    comments
         .into_iter()
-        .map(|comment| comment.content.or(comment.text).unwrap_or_default())
+        .skip(start)
+        .map(|comment| auto_mode_comment_content(&comment))
         .filter(|content| !content.is_empty())
         .collect()
 }
@@ -4101,14 +4137,15 @@ fn auto_mode_preexisting_executor_complete_run(
     scope: &AutoModeDispatchScope,
     base_branch: Option<String>,
 ) -> Option<AutoModeDispatchResponse> {
-    let comments = auto_mode_issue_comment_texts(raw_issue);
-    if extract_auto_mode_executor_commit(&comments).is_none() {
+    let comments = auto_mode_issue_active_comment_texts(raw_issue);
+    if extract_auto_mode_executor_commit(&comments, None).is_none() {
         return None;
     }
 
     let (provider, worktree_path, branch) = auto_mode_existing_worktree_target(project_path, &request.issue_id, scope);
     let surface = auto_mode_surface_from_assignee(raw_issue.assignee.as_deref()).unwrap_or_default();
     let _ = upsert_auto_mode_run(project_path, AutoModeRunRecord {
+        run_id: None,
         project_path: project_path.to_string(),
         project_name: std::path::Path::new(project_path).file_name().map(|name| name.to_string_lossy().to_string()),
         base_branch,
@@ -4388,7 +4425,9 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
         }
     }
 
+    let run_id = new_auto_mode_run_id(issue_id);
     let _ = upsert_auto_mode_run(project_path, AutoModeRunRecord {
+        run_id: Some(run_id.clone()),
         project_path: project_path.to_string(),
         project_name: std::path::Path::new(project_path).file_name().map(|name| name.to_string_lossy().to_string()),
         base_branch,
@@ -4462,7 +4501,7 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     };
 
     // 5. Send Claude command for the selected dispatch scope.
-    let fresh_command = build_auto_mode_agent_command(epic_id, issue_id, &request.issue_title, &workspace_ref);
+    let fresh_command = build_auto_mode_agent_command(epic_id, issue_id, &request.issue_title, &workspace_ref, &run_id);
     let orchestrator_command = if reused_workspace {
         build_auto_mode_resume_command(&worktree_dir).unwrap_or(fresh_command)
     } else {
@@ -4524,6 +4563,7 @@ pub struct AutoModeDispatchReviewRequest {
     pub issue_title: String,
     pub task_branch: String,
     pub executor_commit: String,
+    pub run_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4613,6 +4653,7 @@ async fn auto_mode_dispatch_review(request: AutoModeDispatchReviewRequest) -> Re
         &request.task_branch,
         &request.executor_commit,
         &workspace_ref,
+        &request.run_id,
     );
     let cmux_send_args = vec![
         "send".to_string(),
@@ -4761,9 +4802,9 @@ async fn auto_mode_log_clear(project_path: String) -> Result<(), String> {
     Ok(())
 }
 
-fn extract_auto_mode_executor_commit(comments: &[String]) -> Option<String> {
+fn extract_auto_mode_executor_commit(comments: &[String], run_id: Option<&str>) -> Option<String> {
     comments.iter().rev().find_map(|comment| {
-        if !comment.contains("EXECUTOR_COMPLETE") {
+        if !comment.contains("EXECUTOR_COMPLETE") || !auto_mode_comment_matches_run(comment, run_id) {
             return None;
         }
         comment.lines().find_map(|line| {
@@ -4797,7 +4838,7 @@ async fn auto_mode_tick(project_path: String) -> Result<AutoModeTickResponse, St
             continue;
         }
         let comments = auto_mode_issue_comments(&project_root, &run.issue_id);
-        let (phase, event, error) = auto_mode_run_phase_after_issue_event(&run.phase, &comments);
+        let (phase, event, error) = auto_mode_run_phase_after_issue_event(&run.phase, &comments, run.run_id.as_deref());
         if phase != run.phase || event.is_some() || error.is_some() {
             run.phase = phase;
             run.last_event = event.or_else(|| run.last_event.clone());
@@ -4817,14 +4858,16 @@ async fn auto_mode_run_dispatch_review(request: AutoModeRunActionRequest) -> Res
         return Err(format!("Review dispatch requires executor_complete phase, got {}", run.phase));
     }
     let comments = auto_mode_issue_comments(&project_root, &run.issue_id);
-    let commit = extract_auto_mode_executor_commit(&comments)
-        .ok_or_else(|| "Executor commit not found in durable issue comments".to_string())?;
+    let run_id = run.run_id.clone().ok_or_else(|| "Run id missing; dispatch a fresh executor before review".to_string())?;
+    let commit = extract_auto_mode_executor_commit(&comments, Some(&run_id))
+        .ok_or_else(|| "Executor commit not found for current auto-mode run id".to_string())?;
     let response = auto_mode_dispatch_review(AutoModeDispatchReviewRequest {
         project_path: project_root.clone(),
         issue_id: run.issue_id.clone(),
         issue_title: run.issue_title.clone(),
         task_branch: run.branch.clone(),
         executor_commit: commit,
+        run_id,
     }).await?;
     let updated = update_auto_mode_run(&project_root, &request.issue_id, |run| {
         run.phase = "reviewing".to_string();
@@ -9307,12 +9350,14 @@ prunable gitdir file points to non-existent location
             "borabr-unf.7",
             "auto-mode trigger: poll br ready when enabled, dispatch to cmux+claude",
             "workspace:42",
+            "borabr-unf-7-123",
         );
 
         assert!(command.starts_with("claude "));
         assert!(command.contains("Do NOT read .claude/auto-mode-prompt.md"));
         assert!(command.contains("borabr-unf.7"));
         assert!(command.contains("br show borabr-unf.7"));
+        assert!(command.contains("AUTO_MODE_RUN_ID: borabr-unf-7-123"));
         assert!(command.contains("EXECUTOR_COMPLETE"));
         assert!(command.contains("Do NOT close the issue"));
         assert!(command.contains("Do NOT loop"));
@@ -9425,30 +9470,46 @@ prunable gitdir file points to non-existent location
     fn auto_mode_run_phase_advances_from_durable_issue_comments() {
         let executor_done = "EXECUTOR_COMPLETE\ncommit: abc123\nsummary: done";
         assert_eq!(
-            auto_mode_run_phase_after_issue_event("executing", &[executor_done.to_string()]),
+            auto_mode_run_phase_after_issue_event("executing", &[executor_done.to_string()], None),
             ("executor_complete".to_string(), Some("Executor complete".to_string()), None),
         );
 
         let approved = "REVIEW_VERDICT: APPROVED\nSummary: ok";
         assert_eq!(
-            auto_mode_run_phase_after_issue_event("reviewing", &[approved.to_string()]),
+            auto_mode_run_phase_after_issue_event("reviewing", &[approved.to_string()], None),
             ("review_approved".to_string(), Some("Review approved".to_string()), None),
         );
         assert_eq!(
-            auto_mode_run_phase_after_issue_event("executor_complete", &[approved.to_string()]),
+            auto_mode_run_phase_after_issue_event("executor_complete", &[approved.to_string()], None),
             ("review_approved".to_string(), Some("Review approved".to_string()), None),
         );
 
         let changes = "REVIEW_VERDICT: CHANGES_REQUESTED\nFindings: update tests";
         assert_eq!(
-            auto_mode_run_phase_after_issue_event("reviewing", &[changes.to_string()]),
+            auto_mode_run_phase_after_issue_event("reviewing", &[changes.to_string()], None),
             ("review_changes_requested".to_string(), Some("Review requested changes".to_string()), Some(changes.to_string())),
+        );
+    }
+
+    #[test]
+    fn auto_mode_run_phase_requires_current_run_id_when_present() {
+        let stale = "AUTO_MODE_RUN_ID: old-run\nEXECUTOR_COMPLETE\ncommit: abc123\nsummary: stale";
+        let current = "AUTO_MODE_RUN_ID: current-run\nEXECUTOR_COMPLETE\ncommit: def456\nsummary: current";
+
+        assert_eq!(
+            auto_mode_run_phase_after_issue_event("executing", &[stale.to_string()], Some("current-run")),
+            ("executing".to_string(), None, None),
+        );
+        assert_eq!(
+            auto_mode_run_phase_after_issue_event("executing", &[stale.to_string(), current.to_string()], Some("current-run")),
+            ("executor_complete".to_string(), Some("Executor complete".to_string()), None),
         );
     }
 
     #[test]
     fn auto_mode_identifies_legacy_epic_runs() {
         let run = AutoModeRunRecord {
+            run_id: Some("borabr-tnf-1".to_string()),
             project_path: "/repo".to_string(),
             project_name: Some("repo".to_string()),
             base_branch: Some("master".to_string()),
@@ -9535,6 +9596,66 @@ prunable gitdir file points to non-existent location
     }
 
     #[test]
+    fn dispatch_preflight_ignores_executor_evidence_before_reopen() {
+        let issue: BdRawIssue = serde_json::from_value(serde_json::json!({
+            "id": "borabr-tnf.1",
+            "title": "Header polish",
+            "description": null,
+            "status": "open",
+            "priority": 0,
+            "issue_type": "task",
+            "owner": null,
+            "assignee": null,
+            "labels": [],
+            "created_at": "2026-05-04T00:00:00Z",
+            "created_by": "assistant",
+            "updated_at": "2026-05-04T19:00:00Z",
+            "comments": [
+                {
+                    "id": 47,
+                    "issue_id": "borabr-tnf.1",
+                    "author": "assistant",
+                    "text": "EXECUTOR_COMPLETE\ncommit: 0d2fcb0\nbranch: epic/borabr-tnf\nsummary: done",
+                    "content": null,
+                    "created_at": "2026-05-04T15:42:11Z"
+                },
+                {
+                    "id": 48,
+                    "issue_id": "borabr-tnf.1",
+                    "author": "assistant",
+                    "text": "Reopened: Reopened for auto-mode smoke-test after dispatch preflight fix",
+                    "content": null,
+                    "created_at": "2026-05-04T17:04:35Z"
+                },
+                {
+                    "id": 59,
+                    "issue_id": "borabr-tnf.1",
+                    "author": "auto-mode",
+                    "text": "REVIEW_VERDICT: APPROVED\nSummary: ok",
+                    "content": null,
+                    "created_at": "2026-05-04T18:24:06Z"
+                }
+            ]
+        })).expect("raw issue");
+        let request = AutoModeDispatchRequest {
+            project_path: "/tmp/borabr-missing-project".to_string(),
+            issue_id: "borabr-tnf.1".to_string(),
+            issue_title: "Header polish".to_string(),
+        };
+        let scope = auto_mode_dispatch_scope("borabr-tnf", "borabr-tnf.1");
+
+        assert!(auto_mode_issue_active_comment_texts(&issue).iter().all(|comment| !comment.contains("EXECUTOR_COMPLETE")));
+        assert!(auto_mode_preexisting_executor_complete_run(
+            "/tmp/borabr-missing-project",
+            "borabr-tnf",
+            &request,
+            &issue,
+            &scope,
+            Some("master".to_string()),
+        ).is_none());
+    }
+
+    #[test]
     fn reviewer_command_includes_task_context_and_quality_gates() {
         let command = build_auto_mode_reviewer_command(
             "borabr-unf",
@@ -9543,6 +9664,7 @@ prunable gitdir file points to non-existent location
             "task-borabr-unf.4",
             "abc1234",
             "workspace:50",
+            "borabr-unf-4-123",
         );
 
         assert!(command.starts_with("claude "));
@@ -9553,6 +9675,7 @@ prunable gitdir file points to non-existent location
         assert!(command.contains("no bias"));
         assert!(command.contains("Branch: `task-borabr-unf.4`"));
         assert!(command.contains("executor commit: abc1234"));
+        assert!(command.contains("AUTO_MODE_RUN_ID: borabr-unf-4-123"));
         assert!(command.contains("br show borabr-unf.4"));
         assert!(command.contains("git diff master...task-borabr-unf.4"));
         assert!(command.contains("pnpm test"));
@@ -9573,6 +9696,7 @@ prunable gitdir file points to non-existent location
             "task-epic-1.3",
             "def5678",
             "workspace:99",
+            "epic-1-3-123",
         );
 
         assert!(command.contains("cmux:workspace:99"));

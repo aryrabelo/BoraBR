@@ -68,6 +68,7 @@ export type ActionCenterAutoModeRunNextAction =
   | 'cleanup'
 
 export interface ActionCenterAutoModeRunState {
+  runId?: string | null
   projectPath: string
   projectName?: string | null
   baseBranch?: string | null
@@ -144,6 +145,7 @@ export function buildActionCenterRunActionItem(
     `Project root: ${run.projectPath}`,
     run.baseBranch ? `Base branch: ${run.baseBranch}` : '',
     run.epicId ? `Epic: ${run.epicId}${run.epicTitle ? ` - ${run.epicTitle}` : ''}` : '',
+    run.runId ? `Run: ${run.runId}` : '',
     `Provider: ${run.provider}`,
     `Branch: ${run.branch}`,
     `Worktree: ${run.worktreePath}`,
