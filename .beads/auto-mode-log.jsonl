@@ -1,0 +1,14 @@
+{"timestamp":"2026-05-04T14:06:18.759Z","issueId":"-","eventType":"disabled","detail":"Auto-mode disabled"}
+{"timestamp":"2026-05-04T14:15:29.081Z","issueId":"borabr-tnf.1","eventType":"dispatch_start","detail":"Dispatching: Polish app header typography for auto-mode smoke-test"}
+{"timestamp":"2026-05-04T14:15:29.081Z","issueId":"-","eventType":"enabled","detail":"Auto-mode enabled for /Users/aryrabelo/Sites/beads-task-issue-tracker"}
+{"timestamp":"2026-05-04T14:15:30.136Z","issueId":"borabr-tnf.1","eventType":"dispatch_success","detail":"Running on workspace:48, branch epic/borabr-tnf","surface":"workspace:48"}
+{"timestamp":"2026-05-04T14:18:06.830Z","issueId":"borabr-ua3.7","eventType":"dispatch_start","detail":"Dispatching: Epic branch strategy + structured handoff between tasks"}
+{"timestamp":"2026-05-04T14:18:07.808Z","issueId":"borabr-ua3.7","eventType":"dispatch_success","detail":"Running on workspace:49, branch epic/borabr-ua3","surface":"workspace:49"}
+{"timestamp":"2026-05-04T14:18:51.711Z","issueId":"borabr-ua3.1","eventType":"dispatch_start","detail":"Dispatching: Phase 1-2: Workflow handoff data layer + Action Center types [DONE]"}
+{"timestamp":"2026-05-04T14:18:52.532Z","issueId":"borabr-ua3.1","eventType":"dispatch_success","detail":"Running on workspace:50, branch epic/borabr-ua3","surface":"workspace:50"}
+{"timestamp":"2026-05-04T14:18:56.787Z","issueId":"-","eventType":"disabled","detail":"Auto-mode disabled"}
+{"timestamp":"2026-05-04T15:46:01.385Z","issueId":"-","eventType":"enabled","detail":"Auto-mode enabled for /Users/aryrabelo/Sites/beads-task-issue-tracker"}
+{"timestamp":"2026-05-04T15:46:06.208Z","issueId":"borabr-tnf.1","eventType":"dispatch_start","detail":"Dispatching: Polish app header typography for auto-mode smoke-test"}
+{"timestamp":"2026-05-04T15:46:06.996Z","issueId":"borabr-tnf.1","eventType":"dispatch_success","detail":"Running on workspace:51, branch epic/borabr-tnf","surface":"workspace:51"}
+{"timestamp":"2026-05-04T16:18:25.182Z","issueId":"-","eventType":"enabled","detail":"Auto-mode enabled for /Users/aryrabelo/Sites/beads-task-issue-tracker"}
+{"timestamp":"2026-05-04T16:18:29.833Z","issueId":"-","eventType":"disabled","detail":"Auto-mode disabled"}

@@ -46,12 +46,16 @@ import {
 } from '~/components/ui/tooltip'
 import { Bell, ArrowLeft, Copy, SquareTerminal } from 'lucide-vue-next'
 import {
+  autoModeRunAction,
+  autoModeTick,
   cmuxFocusSurface,
   cmuxSendPrompt,
+  listAutoModeRuns,
   listActionCenterLinearIssues,
   listProjectGitHubPullRequests,
   type ActionCenterGitHubPullRequest,
   type ActionCenterLinearIssue,
+  type AutoModeRunRecord,
 } from '~/utils/bd-api'
 import { resolveTaskTerminalSource } from '~/utils/task-terminal-source'
 import { getFolderName } from '~/utils/path'
@@ -63,8 +67,11 @@ import {
   buildActionCenterProjectActionState,
   buildActionCenterProjectIdleState,
   buildActionCenterReconciledActions,
+  buildActionCenterRunActionItem,
   normalizeActionCenterProjectPath,
   pickVisibleActionCenterItems,
+  type ActionCenterAutoModeRunItem,
+  type ActionCenterAutoModeRunNextAction,
   type ActionCenterGitHubPullRequestState,
   type ActionCenterLinearIssueState,
   type ActionCenterProjectActionState,
@@ -234,7 +241,7 @@ const PROJECT_IDLE_THRESHOLD_MS = 5 * 60 * 1000
 const ACTION_CENTER_PROJECT_POLL_MS = 60 * 1000
 const ACTION_CENTER_VISIBLE_LIMIT = 3
 
-type ActionCenterSource = 'br' | 'next_action' | 'github' | 'linear' | 'other'
+type ActionCenterSource = 'auto_mode' | 'br' | 'next_action' | 'github' | 'linear' | 'other'
 
 interface ActionCenterIssueItem extends Issue {
   actionKind: 'issue'
@@ -299,6 +306,7 @@ interface ActionCenterLinearErrorItem {
 }
 
 type ActionCenterItem =
+  | ActionCenterAutoModeRunItem
   | ActionCenterIssueItem
   | ActionCenterProjectIdleItem
   | ActionCenterReconciledItem
@@ -311,14 +319,16 @@ type ProjectGitHubPullRequestState = ActionCenterGitHubPullRequestState
 type LinearIssueState = ActionCenterLinearIssueState
 
 const actionSourceOrder: Record<ActionCenterSource, number> = {
-  br: 0,
-  next_action: 1,
-  github: 2,
-  linear: 3,
-  other: 4,
+  auto_mode: 0,
+  br: 1,
+  next_action: 2,
+  github: 3,
+  linear: 4,
+  other: 5,
 }
 
 const actionSourceLabel: Record<ActionCenterSource, string> = {
+  auto_mode: 'Auto-Mode',
   br: 'BR',
   next_action: 'Next Action',
   github: 'GitHub',
@@ -327,6 +337,7 @@ const actionSourceLabel: Record<ActionCenterSource, string> = {
 }
 
 const actionBadgeClass: Record<ActionCenterSource, string> = {
+  auto_mode: 'border-cyan-500/40 text-cyan-600 bg-cyan-500/10',
   br: 'border-blue-500/40 text-blue-600 bg-blue-500/10',
   next_action: 'border-emerald-500/40 text-emerald-600 bg-emerald-500/10',
   github: 'border-violet-500/40 text-violet-600 bg-violet-500/10',
@@ -363,12 +374,18 @@ const normalizeProjectPath = normalizeActionCenterProjectPath
 const actionCenterNow = ref(Date.now())
 const projectIdleStates = ref<Record<string, ProjectIdleState>>({})
 const projectActionStates = ref<Record<string, ProjectActionState>>({})
+const autoModeRunStates = ref<Record<string, AutoModeRunRecord[]>>({})
 const projectGitHubPullRequestStates = ref<Record<string, ProjectGitHubPullRequestState>>({})
 const linearIssueState = ref<LinearIssueState | null>(null)
 const dismissedActionCenterItems = useLocalStorage<Record<string, boolean>>('borabr:action-center:dismissed', {})
 const snoozedActionCenterItems = useLocalStorage<Record<string, number>>('borabr:action-center:snoozed', {})
 const isRefreshingProjectIdle = ref(false)
 let actionCenterProjectPollTimer: ReturnType<typeof setInterval> | null = null
+
+const autoModeRunActionItems = computed<ActionCenterAutoModeRunItem[]>(() => {
+  return Object.values(autoModeRunStates.value)
+    .flatMap(runs => runs.map(run => buildActionCenterRunActionItem(run)))
+})
 
 const readyActionItems = computed<ActionCenterIssueItem[]>(() => {
   return Object.values(projectActionStates.value)
@@ -530,6 +547,7 @@ const projectIdleActionItems = computed<ActionCenterProjectIdleItem[]>(() => {
 
 const actionCenterItems = computed<ActionCenterItem[]>(() => {
   const items = [
+    ...autoModeRunActionItems.value,
     ...projectIdleActionItems.value,
     ...readyActionItems.value,
     ...reconciledNextActionItems.value,
@@ -556,7 +574,23 @@ const actionCenterItems = computed<ActionCenterItem[]>(() => {
 
 const actionCenterCount = computed(() => actionCenterItems.value.length)
 
+const autoModeRunActionLabel: Record<ActionCenterAutoModeRunNextAction, string> = {
+  continue: 'Continue',
+  open_worktree: 'Open Worktree',
+  dispatch_review: 'Dispatch Review',
+  create_pr: 'Create PR/UPR',
+  retry: 'Retry',
+  cancel: 'Cancel',
+  cleanup: 'Cleanup',
+}
+
+const getAutoModeRunNextLabel = (item: ActionCenterAutoModeRunItem) => {
+  const nextAction = item.nextActions[0]
+  return nextAction ? autoModeRunActionLabel[nextAction] : 'Continue'
+}
+
 const getActionCenterPrimaryLabel = (item: ActionCenterItem) => {
+  if (item.actionKind === 'auto_mode_run') return getAutoModeRunNextLabel(item)
   if (item.actionKind === 'issue') return 'Abrir issue'
   if (item.actionKind === 'next_action' && item.primaryTarget === 'github') return 'Abrir PR'
   if (item.actionKind === 'next_action' && item.primaryTarget === 'linear') return 'Abrir Linear'
@@ -665,6 +699,7 @@ const refreshProjectIdleNotifications = async () => {
     if (!isBr.value || projects.value.length === 0) {
       projectIdleStates.value = {}
       projectActionStates.value = {}
+      autoModeRunStates.value = {}
       projectGitHubPullRequestStates.value = {}
       linearIssueState.value = null
     }
@@ -677,6 +712,7 @@ const refreshProjectIdleNotifications = async () => {
     const now = Date.now()
     const nextStates: Record<string, ProjectIdleState> = {}
     const nextActionStates: Record<string, ProjectActionState> = {}
+    const nextAutoModeRunStates: Record<string, AutoModeRunRecord[]> = {}
     const nextGitHubPullRequestStates: Record<string, ProjectGitHubPullRequestState> = {}
 
     // GitHub PR calls deferred until after project loop to deduplicate by repo
@@ -687,6 +723,7 @@ const refreshProjectIdleNotifications = async () => {
 
       try {
         const projectIssues = await bdList({ path: project.path, includeAll: true })
+        nextAutoModeRunStates[projectKey] = await listAutoModeRuns(project.path)
         const hasInProgressWork = projectIssues.some(issue => issue.status === 'in_progress')
         const projectReadyIssues = hasInProgressWork ? [] : await bdReady(project.path)
         const actionState = buildActionCenterProjectActionState({
@@ -740,6 +777,7 @@ const refreshProjectIdleNotifications = async () => {
 
     projectIdleStates.value = nextStates
     projectActionStates.value = nextActionStates
+    autoModeRunStates.value = nextAutoModeRunStates
     projectGitHubPullRequestStates.value = nextGitHubPullRequestStates
     linearIssueState.value = buildActionCenterLinearIssueState({
       response: await listActionCenterLinearIssues(),
@@ -773,6 +811,17 @@ const syncCurrentProjectActionState = () => {
     ...projectActionStates.value,
     [projectKey]: actionState,
   }
+
+  listAutoModeRuns(project.path)
+    .then((runs) => {
+      autoModeRunStates.value = {
+        ...autoModeRunStates.value,
+        [projectKey]: runs,
+      }
+    })
+    .catch(() => {
+      // Ignore projects without durable auto-mode state.
+    })
 
   const idleState = buildActionCenterProjectIdleState({
     projectPath: project.path,
@@ -994,6 +1043,38 @@ const handleCopyActionItemPrompt = async (item: ActionCenterItem) => {
   }
 }
 
+const refreshAutoModeRunState = async (projectPath: string) => {
+  const projectKey = normalizeProjectPath(projectPath)
+  const runs = await listAutoModeRuns(projectPath)
+  autoModeRunStates.value = {
+    ...autoModeRunStates.value,
+    [projectKey]: runs,
+  }
+}
+
+const handleAutoModeRunAction = async (item: ActionCenterAutoModeRunItem, action: ActionCenterAutoModeRunNextAction) => {
+  actionCenterTerminalError.value = ''
+  actionCenterTerminalErrorItemId.value = item.actionId
+
+  try {
+    if (action === 'continue') {
+      const result = await autoModeTick(item.projectPath)
+      autoModeRunStates.value = {
+        ...autoModeRunStates.value,
+        [normalizeProjectPath(item.projectPath)]: result.runs,
+      }
+    } else {
+      await autoModeRunAction(action, item.projectPath, item.issueId)
+      await refreshAutoModeRunState(item.projectPath)
+    }
+    notifySuccess(`${autoModeRunActionLabel[action]} executado`)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    actionCenterTerminalError.value = message
+    notifyError(message)
+  }
+}
+
 const switchToActionProject = async (item: ActionCenterItem) => {
   if (isMobileView.value) {
     mobilePanel.value = 'issues'
@@ -1013,7 +1094,7 @@ const handleOpenActionProject = async (item: ActionCenterItem) => {
 const handleTakeActionItem = async (item: ActionCenterItem) => {
   handleCloseActionCenter()
   await switchToActionProject(item)
-  if (item.actionKind === 'project_idle' || item.actionKind === 'github_error' || item.actionKind === 'linear_error') return
+  if (item.actionKind === 'project_idle' || item.actionKind === 'github_error' || item.actionKind === 'linear_error' || item.actionKind === 'auto_mode_run') return
 
   if (item.actionKind === 'next_action') {
     await openUrl(item.primaryUrl)
@@ -1644,8 +1725,43 @@ watch(
                             <p v-if="action.description" class="mt-1 text-xs text-muted-foreground line-clamp-2">
                               {{ action.description }}
                             </p>
+                            <div
+                              v-if="action.actionKind === 'auto_mode_run'"
+                              class="mt-3 grid gap-1 rounded-md border border-border/60 bg-muted/30 p-2 text-[11px]"
+                            >
+                              <div class="flex flex-wrap gap-x-3 gap-y-1">
+                                <span>Issue: <span class="font-medium text-foreground">{{ action.issueId }}</span></span>
+                                <span v-if="action.epicId">Epic: <span class="font-medium text-foreground">{{ action.epicId }}</span></span>
+                                <span>Provider: <span class="font-medium text-foreground">{{ action.provider }}</span></span>
+                                <span>Phase: <span class="font-medium text-foreground">{{ action.phase }}</span></span>
+                                <span>Next: <span class="font-medium text-foreground">{{ getAutoModeRunNextLabel(action) }}</span></span>
+                              </div>
+                              <div class="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                                <span>Branch: <span class="font-mono text-foreground">{{ action.branch }}</span></span>
+                                <span>Worktree: <span class="font-mono text-foreground break-all">{{ action.worktreePath }}</span></span>
+                              </div>
+                              <div v-if="action.lastEvent || action.error" class="text-muted-foreground">
+                                <span v-if="action.lastEvent">Last event: {{ action.lastEvent }}</span>
+                                <span v-if="action.error" class="text-destructive"> Error: {{ action.error }}</span>
+                              </div>
+                            </div>
                             <div class="mt-3 flex flex-wrap gap-2">
-                              <Button size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
+                              <template v-if="action.actionKind === 'auto_mode_run'">
+                                <Button
+                                  v-for="runAction in action.nextActions"
+                                  :key="`${action.actionId}:${runAction}`"
+                                  size="sm"
+                                  class="h-7 text-xs"
+                                  :variant="runAction === 'cancel' ? 'outline' : 'default'"
+                                  @click="handleAutoModeRunAction(action, runAction)"
+                                >
+                                  {{ autoModeRunActionLabel[runAction] }}
+                                </Button>
+                                <Button variant="secondary" size="sm" class="h-7 text-xs" @click="handleAutoModeRunAction(action, 'open_worktree')">
+                                  Open Worktree
+                                </Button>
+                              </template>
+                              <Button v-else size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
                                 {{ getActionCenterPrimaryLabel(action) }}
                               </Button>
                               <Button
@@ -1677,7 +1793,7 @@ watch(
                             </div>
                           </div>
                         </div>
-                        <p v-if="action.actionKind === 'issue' && actionCenterTerminalErrorItemId === action.actionId && actionCenterTerminalError" class="mt-2 text-xs text-destructive">
+                        <p v-if="(action.actionKind === 'issue' || action.actionKind === 'auto_mode_run') && actionCenterTerminalErrorItemId === action.actionId && actionCenterTerminalError" class="mt-2 text-xs text-destructive">
                           {{ actionCenterTerminalError }}
                         </p>
                       </div>
@@ -1971,8 +2087,43 @@ watch(
                         <p v-if="action.description" class="mt-1 text-xs text-muted-foreground line-clamp-2">
                           {{ action.description }}
                         </p>
+                        <div
+                          v-if="action.actionKind === 'auto_mode_run'"
+                          class="mt-3 grid gap-1 rounded-md border border-border/60 bg-muted/30 p-2 text-[11px]"
+                        >
+                          <div class="flex flex-wrap gap-x-3 gap-y-1">
+                            <span>Issue: <span class="font-medium text-foreground">{{ action.issueId }}</span></span>
+                            <span v-if="action.epicId">Epic: <span class="font-medium text-foreground">{{ action.epicId }}</span></span>
+                            <span>Provider: <span class="font-medium text-foreground">{{ action.provider }}</span></span>
+                            <span>Phase: <span class="font-medium text-foreground">{{ action.phase }}</span></span>
+                            <span>Next: <span class="font-medium text-foreground">{{ getAutoModeRunNextLabel(action) }}</span></span>
+                          </div>
+                          <div class="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                            <span>Branch: <span class="font-mono text-foreground">{{ action.branch }}</span></span>
+                            <span>Worktree: <span class="font-mono text-foreground break-all">{{ action.worktreePath }}</span></span>
+                          </div>
+                          <div v-if="action.lastEvent || action.error" class="text-muted-foreground">
+                            <span v-if="action.lastEvent">Last event: {{ action.lastEvent }}</span>
+                            <span v-if="action.error" class="text-destructive"> Error: {{ action.error }}</span>
+                          </div>
+                        </div>
                         <div class="mt-3 flex flex-wrap gap-2">
-                          <Button size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
+                          <template v-if="action.actionKind === 'auto_mode_run'">
+                            <Button
+                              v-for="runAction in action.nextActions"
+                              :key="`${action.actionId}:${runAction}`"
+                              size="sm"
+                              class="h-7 text-xs"
+                              :variant="runAction === 'cancel' ? 'outline' : 'default'"
+                              @click="handleAutoModeRunAction(action, runAction)"
+                            >
+                              {{ autoModeRunActionLabel[runAction] }}
+                            </Button>
+                            <Button variant="secondary" size="sm" class="h-7 text-xs" @click="handleAutoModeRunAction(action, 'open_worktree')">
+                              Open Worktree
+                            </Button>
+                          </template>
+                          <Button v-else size="sm" class="h-7 text-xs" @click="handleTakeActionItem(action)">
                             {{ getActionCenterPrimaryLabel(action) }}
                           </Button>
                           <Button
@@ -2004,7 +2155,7 @@ watch(
                         </div>
                       </div>
                     </div>
-                    <p v-if="action.actionKind === 'issue' && actionCenterTerminalErrorItemId === action.actionId && actionCenterTerminalError" class="mt-2 text-xs text-destructive">
+                    <p v-if="(action.actionKind === 'issue' || action.actionKind === 'auto_mode_run') && actionCenterTerminalErrorItemId === action.actionId && actionCenterTerminalError" class="mt-2 text-xs text-destructive">
                       {{ actionCenterTerminalError }}
                     </p>
                   </div>

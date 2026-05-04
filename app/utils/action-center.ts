@@ -44,6 +44,61 @@ export type ActionCenterReconciledActionKind =
 
 export type ActionCenterReconciledActionTarget = 'github' | 'linear'
 
+export type ActionCenterAutoModeRunPhase =
+  | 'workspace_ready'
+  | 'executing'
+  | 'executor_complete'
+  | 'reviewing'
+  | 'review_approved'
+  | 'review_changes_requested'
+  | 'creating_pr'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+
+export type ActionCenterAutoModeProvider = 'gitWorktree' | 'wt'
+
+export type ActionCenterAutoModeRunNextAction =
+  | 'continue'
+  | 'open_worktree'
+  | 'dispatch_review'
+  | 'create_pr'
+  | 'retry'
+  | 'cancel'
+  | 'cleanup'
+
+export interface ActionCenterAutoModeRunState {
+  projectPath: string
+  projectName?: string | null
+  baseBranch?: string | null
+  issueId: string
+  issueTitle: string
+  epicId?: string | null
+  epicTitle?: string | null
+  provider: ActionCenterAutoModeProvider
+  branch: string
+  worktreePath: string
+  phase: ActionCenterAutoModeRunPhase
+  lastEvent?: string | null
+  error?: string | null
+  attempts: number
+  updatedAt?: string | null
+}
+
+export interface ActionCenterAutoModeRunItem extends ActionCenterAutoModeRunState {
+  actionKind: 'auto_mode_run'
+  actionId: string
+  id: string
+  title: string
+  description: string
+  projectPath: string
+  projectName: string
+  actionSource: 'auto_mode'
+  actionSourceLabel: string
+  actionTimestamp: number
+  nextActions: ActionCenterAutoModeRunNextAction[]
+}
+
 export interface ActionCenterReconciledAction {
   actionKey: string
   nextActionKind: ActionCenterReconciledActionKind
@@ -55,6 +110,61 @@ export interface ActionCenterReconciledAction {
   githubPullRequest?: ActionCenterGitHubPullRequest
   linearIssue?: ActionCenterLinearIssue
   actionTimestamp: number
+}
+
+export function getActionCenterRunNextActions(
+  run: Pick<ActionCenterAutoModeRunState, 'phase'>,
+): ActionCenterAutoModeRunNextAction[] {
+  switch (run.phase) {
+    case 'workspace_ready':
+    case 'executing':
+    case 'reviewing':
+    case 'review_changes_requested':
+    case 'creating_pr':
+      return ['continue', 'cancel']
+    case 'executor_complete':
+      return ['dispatch_review', 'continue', 'cancel']
+    case 'review_approved':
+      return ['create_pr', 'continue', 'cancel']
+    case 'failed':
+      return ['retry', 'cancel']
+    case 'done':
+    case 'cancelled':
+      return ['cleanup']
+  }
+}
+
+export function buildActionCenterRunActionItem(
+  run: ActionCenterAutoModeRunState,
+): ActionCenterAutoModeRunItem {
+  const updatedAt = Date.parse(run.updatedAt || '')
+  const actionTimestamp = Number.isNaN(updatedAt) ? Date.now() : updatedAt
+  const projectName = run.projectName || run.projectPath.split('/').filter(Boolean).at(-1) || 'Project'
+  const descriptionParts = [
+    `Project root: ${run.projectPath}`,
+    run.baseBranch ? `Base branch: ${run.baseBranch}` : '',
+    run.epicId ? `Epic: ${run.epicId}${run.epicTitle ? ` - ${run.epicTitle}` : ''}` : '',
+    `Provider: ${run.provider}`,
+    `Branch: ${run.branch}`,
+    `Worktree: ${run.worktreePath}`,
+    `Phase: ${run.phase}`,
+    run.lastEvent ? `Last event: ${run.lastEvent}` : '',
+    run.error ? `Error: ${run.error}` : '',
+  ].filter(Boolean)
+
+  return {
+    ...run,
+    actionKind: 'auto_mode_run',
+    actionId: `auto-mode:${normalizeActionCenterProjectPath(run.projectPath)}:${run.issueId}`,
+    id: run.issueId,
+    title: `${run.issueId}: ${run.issueTitle}`,
+    description: descriptionParts.join(' | '),
+    projectName,
+    actionSource: 'auto_mode',
+    actionSourceLabel: 'Auto-Mode',
+    actionTimestamp,
+    nextActions: getActionCenterRunNextActions(run),
+  }
 }
 
 interface BuildActionCenterProjectActionStateOptions {

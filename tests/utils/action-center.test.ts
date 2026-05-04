@@ -6,6 +6,8 @@ import {
   buildActionCenterLinearIssueState,
   buildActionCenterProjectActionState,
   buildActionCenterProjectIdleState,
+  buildActionCenterRunActionItem,
+  getActionCenterRunNextActions,
   buildActionCenterReconciledActions,
   countActionCenterInProgressIssues,
   pickVisibleActionCenterItems,
@@ -70,6 +72,51 @@ function makeLinearIssue(overrides: Partial<ActionCenterLinearIssue> = {}): Acti
 }
 
 describe('Action Center project state', () => {
+  it('maps durable auto-mode phases to deterministic next actions', () => {
+    expect(getActionCenterRunNextActions({ phase: 'executor_complete' })).toEqual(['dispatch_review', 'continue', 'cancel'])
+    expect(getActionCenterRunNextActions({ phase: 'review_approved' })).toEqual(['create_pr', 'continue', 'cancel'])
+    expect(getActionCenterRunNextActions({ phase: 'failed' })).toEqual(['retry', 'cancel'])
+    expect(getActionCenterRunNextActions({ phase: 'done' })).toEqual(['cleanup'])
+    expect(getActionCenterRunNextActions({ phase: 'cancelled' })).toEqual(['cleanup'])
+  })
+
+  it('builds auto-mode Action Center items from durable run state', () => {
+    const item = buildActionCenterRunActionItem({
+      projectPath: '/Users/aryrabelo/Sites/entrc-backend',
+      projectName: 'entrc-backend',
+      baseBranch: 'main',
+      issueId: 'ENG-559',
+      issueTitle: 'Ship deterministic auto-mode',
+      epicId: 'ENG',
+      provider: 'wt',
+      branch: 'ary/ENG-559-auto-mode',
+      worktreePath: '/Users/aryrabelo/Sites/entrc-backend/.worktrees/ENG-559',
+      phase: 'executing',
+      lastEvent: 'Executor running',
+      attempts: 1,
+      updatedAt: '2026-05-04T12:00:00.000Z',
+    })
+
+    expect(item).toMatchObject({
+      actionKind: 'auto_mode_run',
+      actionSource: 'auto_mode',
+      actionSourceLabel: 'Auto-Mode',
+      id: 'ENG-559',
+      title: 'ENG-559: Ship deterministic auto-mode',
+      projectPath: '/Users/aryrabelo/Sites/entrc-backend',
+      provider: 'wt',
+      branch: 'ary/ENG-559-auto-mode',
+      worktreePath: '/Users/aryrabelo/Sites/entrc-backend/.worktrees/ENG-559',
+      phase: 'executing',
+      lastEvent: 'Executor running',
+      nextActions: ['continue', 'cancel'],
+    })
+    expect(item.description).toContain('Project root: /Users/aryrabelo/Sites/entrc-backend')
+    expect(item.description).toContain('Base branch: main')
+    expect(item.description).toContain('Provider: wt')
+    expect(item.description).toContain('Worktree: /Users/aryrabelo/Sites/entrc-backend/.worktrees/ENG-559')
+  })
+
   it('builds the prompt used by Action Center issue actions', () => {
     expect(buildActionCenterIssuePrompt(makeIssue({ id: 'borabr-vox.3' }))).toBe(
       'Continuar a tarefa borabr-vox.3 usando a skill BR',

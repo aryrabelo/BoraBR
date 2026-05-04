@@ -3809,6 +3809,233 @@ fn project_has_in_progress_auto_mode_task(project_path: &str) -> Result<bool, St
     Ok(has_in_progress_non_epic_issue(&issues))
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeRunRecord {
+    pub project_path: String,
+    pub project_name: Option<String>,
+    pub base_branch: Option<String>,
+    pub issue_id: String,
+    pub issue_title: String,
+    pub epic_id: Option<String>,
+    pub epic_title: Option<String>,
+    pub provider: String,
+    pub branch: String,
+    pub worktree_path: String,
+    pub phase: String,
+    pub last_event: Option<String>,
+    pub error: Option<String>,
+    pub attempts: u32,
+    pub surface: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeTickResponse {
+    pub runs: Vec<AutoModeRunRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeRunActionRequest {
+    pub project_path: String,
+    pub issue_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoModeRunActionResponse {
+    pub run: AutoModeRunRecord,
+}
+
+fn now_rfc3339_string() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn auto_mode_runs_path(project_path: &str) -> PathBuf {
+    std::path::Path::new(project_path).join(".beads").join("auto-mode-runs.json")
+}
+
+fn read_auto_mode_runs(project_path: &str) -> Result<Vec<AutoModeRunRecord>, String> {
+    let path = auto_mode_runs_path(project_path);
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read auto-mode runs: {}", e))?;
+    if content.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse auto-mode runs: {}", e))
+}
+
+fn write_auto_mode_runs(project_path: &str, runs: &[AutoModeRunRecord]) -> Result<(), String> {
+    let path = auto_mode_runs_path(project_path);
+    let parent = path.parent().ok_or_else(|| "Invalid auto-mode runs path".to_string())?;
+    if !parent.exists() {
+        return Err("Project .beads/ directory does not exist".to_string());
+    }
+    let content = serde_json::to_string_pretty(runs)
+        .map_err(|e| format!("Failed to serialize auto-mode runs: {}", e))?;
+    fs::write(&path, format!("{}\n", content))
+        .map_err(|e| format!("Failed to write auto-mode runs: {}", e))
+}
+
+fn upsert_auto_mode_run(project_path: &str, run: AutoModeRunRecord) -> Result<AutoModeRunRecord, String> {
+    let mut runs = read_auto_mode_runs(project_path)?;
+    if let Some(existing) = runs.iter_mut().find(|candidate| candidate.issue_id == run.issue_id) {
+        *existing = run.clone();
+    } else {
+        runs.push(run.clone());
+    }
+    write_auto_mode_runs(project_path, &runs)?;
+    Ok(run)
+}
+
+fn update_auto_mode_run<F>(project_path: &str, issue_id: &str, updater: F) -> Result<AutoModeRunRecord, String>
+where
+    F: FnOnce(&mut AutoModeRunRecord),
+{
+    let mut runs = read_auto_mode_runs(project_path)?;
+    let run = runs
+        .iter_mut()
+        .find(|candidate| candidate.issue_id == issue_id)
+        .ok_or_else(|| format!("No auto-mode run for {}", issue_id))?;
+    updater(run);
+    run.updated_at = Some(now_rfc3339_string());
+    let updated = run.clone();
+    write_auto_mode_runs(project_path, &runs)?;
+    Ok(updated)
+}
+
+fn find_auto_mode_run(project_path: &str, issue_id: &str) -> Result<AutoModeRunRecord, String> {
+    read_auto_mode_runs(project_path)?
+        .into_iter()
+        .find(|candidate| candidate.issue_id == issue_id)
+        .ok_or_else(|| format!("No auto-mode run for {}", issue_id))
+}
+
+fn auto_mode_run_phase_after_issue_event(
+    phase: &str,
+    comments: &[String],
+) -> (String, Option<String>, Option<String>) {
+    if phase == "executing" {
+        if comments.iter().rev().any(|comment| comment.contains("EXECUTOR_COMPLETE")) {
+            return (
+                "executor_complete".to_string(),
+                Some("Executor complete".to_string()),
+                None,
+            );
+        }
+    }
+
+    if phase == "reviewing" {
+        if let Some(verdict) = comments
+            .iter()
+            .rev()
+            .find(|comment| comment.contains("REVIEW_VERDICT:"))
+        {
+            if verdict.to_uppercase().contains("REVIEW_VERDICT: APPROVED") {
+                return (
+                    "review_approved".to_string(),
+                    Some("Review approved".to_string()),
+                    None,
+                );
+            }
+            if verdict.to_uppercase().contains("REVIEW_VERDICT: CHANGES_REQUESTED") {
+                return (
+                    "review_changes_requested".to_string(),
+                    Some("Review requested changes".to_string()),
+                    Some(verdict.clone()),
+                );
+            }
+        }
+    }
+
+    (phase.to_string(), None, None)
+}
+
+fn auto_mode_issue_comments(project_path: &str, issue_id: &str) -> Vec<String> {
+    let output = match execute_bd("show", &[issue_id.to_string()], Some(project_path)) {
+        Ok(output) => output,
+        Err(_) => return vec![],
+    };
+    let issues = match parse_issues_tolerant(&output, "auto_mode_tick_show") {
+        Ok(issues) => issues,
+        Err(_) => return vec![],
+    };
+    issues
+        .first()
+        .and_then(|issue| issue.comments.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|comment| comment.content.or(comment.text).unwrap_or_default())
+        .filter(|content| !content.is_empty())
+        .collect()
+}
+
+fn auto_mode_resolve_project_root(project_path_raw: &str) -> String {
+    let output = new_command("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_path_raw)
+        .env("PATH", get_extended_path())
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+        _ => project_path_raw.to_string(),
+    }
+}
+
+fn auto_mode_project_base_branch(project_path: &str) -> Option<String> {
+    new_command("git")
+        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .current_dir(project_path)
+        .env("PATH", get_extended_path())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|branch| !branch.is_empty())
+}
+
+fn auto_mode_wt_get(project_path: &str, issue_id: &str) -> Option<String> {
+    let output = new_command("wt")
+        .args(["get", issue_id])
+        .current_dir(project_path)
+        .env("PATH", get_extended_path())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() || !std::path::Path::new(&path).exists() {
+        return None;
+    }
+    Some(path)
+}
+
+fn auto_mode_branch_for_path(path: &str, fallback: &str) -> String {
+    new_command("git")
+        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .current_dir(path)
+        .env("PATH", get_extended_path())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|branch| !branch.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoModeDispatchRequest {
@@ -3864,103 +4091,116 @@ fn caffeinate_stop() -> Result<bool, String> {
 #[tauri::command]
 async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoModeDispatchResponse, String> {
     let issue_id = &request.issue_id;
-
-    // Derive epic ID: "borabr-unf.1" → "borabr-unf", epic itself stays as-is
     let epic_id = issue_id.rfind('.').map(|pos| &issue_id[..pos]).unwrap_or(issue_id);
     let scope = auto_mode_dispatch_scope(epic_id, issue_id);
-    let branch = scope.branch.clone();
-
-    // Resolve project root (follow worktree back to main repo)
-    let project_path_raw = &request.project_path;
-    let git_root_output = new_command("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(project_path_raw)
-        .env("PATH", get_extended_path())
-        .output()
-        .map_err(|e| format!("Failed to find git root: {}", e))?;
-    let git_root = if git_root_output.status.success() {
-        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
-    } else {
-        project_path_raw.clone()
-    };
+    let mut branch = scope.branch.clone();
+    let git_root = auto_mode_resolve_project_root(&request.project_path);
     let project_path = &git_root;
+    let base_branch = auto_mode_project_base_branch(project_path);
 
     if project_has_in_progress_auto_mode_task(project_path)? {
         return Err("auto-mode dispatch blocked: project already has in-progress work".to_string());
     }
 
-    // Worktree path: worktrees/<scope> (task work uses task-<issue-id>)
-    let worktrees_parent = format!("{}/../worktrees", project_path);
-    let worktrees_parent_path = std::path::Path::new(&worktrees_parent);
-    if !worktrees_parent_path.exists() {
-        std::fs::create_dir_all(worktrees_parent_path)
-            .map_err(|e| format!("Failed to create worktrees dir: {}", e))?;
-    }
-    let canonical_parent = worktrees_parent_path.canonicalize()
-        .map_err(|e| format!("Failed to canonicalize worktrees dir: {}", e))?;
-    let canonical_worktree = canonical_parent.join(&scope.worktree_name);
-    let mut worktree_dir = canonical_worktree.to_string_lossy().to_string();
+    let provider;
+    let mut worktree_dir;
 
-    log::info!("[auto-mode] Dispatching epic {} (task {}) to worktree {}", epic_id, issue_id, worktree_dir);
-
-    // 1. Ensure scoped worktree exists.
-    if canonical_worktree.exists() {
-        log::info!("[auto-mode] Scoped worktree already exists, reusing: {}", worktree_dir);
+    if let Some(wt_worktree) = auto_mode_wt_get(project_path, issue_id) {
+        provider = "wt";
+        worktree_dir = wt_worktree;
+        branch = auto_mode_branch_for_path(&worktree_dir, &branch);
+        log::info!("[auto-mode] Reusing wt worktree for {} at {}", issue_id, worktree_dir);
     } else {
-        let worktree_output = new_command("git")
-            .args(["worktree", "add", "-b", &branch, &worktree_dir, "HEAD"])
-            .current_dir(project_path)
-            .env("PATH", get_extended_path())
-            .output()
-            .map_err(|e| format!("Failed to create worktree: {}", e))?;
+        provider = "gitWorktree";
+        let worktrees_parent = format!("{}/../worktrees", project_path);
+        let worktrees_parent_path = std::path::Path::new(&worktrees_parent);
+        if !worktrees_parent_path.exists() {
+            std::fs::create_dir_all(worktrees_parent_path)
+                .map_err(|e| format!("Failed to create worktrees dir: {}", e))?;
+        }
+        let canonical_parent = worktrees_parent_path.canonicalize()
+            .map_err(|e| format!("Failed to canonicalize worktrees dir: {}", e))?;
+        let canonical_worktree = canonical_parent.join(&scope.worktree_name);
+        worktree_dir = canonical_worktree.to_string_lossy().to_string();
 
-        if !worktree_output.status.success() {
-            let stderr = String::from_utf8_lossy(&worktree_output.stderr).to_string();
-            if let Some(existing) = extract_worktree_path_from_error(&stderr) {
-                log::info!("[auto-mode] Reusing existing worktree at {}", existing);
-                worktree_dir = existing;
-            } else if stderr.contains("already exists") {
-                let retry = new_command("git")
-                    .args(["worktree", "add", &worktree_dir, &branch])
-                    .current_dir(project_path)
-                    .env("PATH", get_extended_path())
-                    .output()
-                    .map_err(|e| format!("Failed to create worktree (retry): {}", e))?;
-                if !retry.status.success() {
-                    let retry_err = String::from_utf8_lossy(&retry.stderr).to_string();
-                    if let Some(existing) = extract_worktree_path_from_error(&retry_err) {
-                        worktree_dir = existing;
-                    } else {
-                        return Err(format!("git worktree failed: {}", retry_err.trim()));
+        log::info!("[auto-mode] Dispatching epic {} (task {}) to worktree {}", epic_id, issue_id, worktree_dir);
+
+        if canonical_worktree.exists() {
+            log::info!("[auto-mode] Scoped worktree already exists, reusing: {}", worktree_dir);
+        } else {
+            let worktree_output = new_command("git")
+                .args(["worktree", "add", "-b", &branch, &worktree_dir, "HEAD"])
+                .current_dir(project_path)
+                .env("PATH", get_extended_path())
+                .output()
+                .map_err(|e| format!("Failed to create worktree: {}", e))?;
+
+            if !worktree_output.status.success() {
+                let stderr = String::from_utf8_lossy(&worktree_output.stderr).to_string();
+                if let Some(existing) = extract_worktree_path_from_error(&stderr) {
+                    log::info!("[auto-mode] Reusing existing worktree at {}", existing);
+                    worktree_dir = existing;
+                } else if stderr.contains("already exists") {
+                    let retry = new_command("git")
+                        .args(["worktree", "add", &worktree_dir, &branch])
+                        .current_dir(project_path)
+                        .env("PATH", get_extended_path())
+                        .output()
+                        .map_err(|e| format!("Failed to create worktree (retry): {}", e))?;
+                    if !retry.status.success() {
+                        let retry_err = String::from_utf8_lossy(&retry.stderr).to_string();
+                        if let Some(existing) = extract_worktree_path_from_error(&retry_err) {
+                            worktree_dir = existing;
+                        } else {
+                            return Err(format!("git worktree failed: {}", retry_err.trim()));
+                        }
                     }
+                } else {
+                    return Err(format!("git worktree failed: {}", stderr.trim()));
                 }
-            } else {
-                return Err(format!("git worktree failed: {}", stderr.trim()));
+            }
+            log::info!("[auto-mode] Scoped worktree ready: {}", worktree_dir);
+        }
+
+        let worktree_beads = std::path::Path::new(&worktree_dir).join(".beads");
+        let main_beads = std::path::Path::new(project_path).join(".beads");
+        if main_beads.exists() && !worktree_beads.exists() {
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&main_beads, &worktree_beads)
+                    .map_err(|e| format!("Failed to symlink .beads: {}", e))?;
+                log::info!("[auto-mode] Symlinked .beads/ → {}", main_beads.display());
+            }
+        } else if worktree_beads.is_dir() && !worktree_beads.is_symlink() {
+            log::info!("[auto-mode] Replacing .beads/ dir with symlink to main repo");
+            std::fs::remove_dir_all(&worktree_beads)
+                .map_err(|e| format!("Failed to remove worktree .beads/: {}", e))?;
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&main_beads, &worktree_beads)
+                    .map_err(|e| format!("Failed to symlink .beads: {}", e))?;
             }
         }
-        log::info!("[auto-mode] Scoped worktree ready: {}", worktree_dir);
     }
 
-    // 2. Symlink .beads/ from main repo so worktree shares issue state
-    let worktree_beads = std::path::Path::new(&worktree_dir).join(".beads");
-    let main_beads = std::path::Path::new(project_path).join(".beads");
-    if main_beads.exists() && !worktree_beads.exists() {
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(&main_beads, &worktree_beads)
-                .map_err(|e| format!("Failed to symlink .beads: {}", e))?;
-            log::info!("[auto-mode] Symlinked .beads/ → {}", main_beads.display());
-        }
-    } else if worktree_beads.is_dir() && !worktree_beads.is_symlink() {
-        log::info!("[auto-mode] Replacing .beads/ dir with symlink to main repo");
-        std::fs::remove_dir_all(&worktree_beads)
-            .map_err(|e| format!("Failed to remove worktree .beads/: {}", e))?;
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(&main_beads, &worktree_beads)
-                .map_err(|e| format!("Failed to symlink .beads: {}", e))?;
-        }
-    }
+    let _ = upsert_auto_mode_run(project_path, AutoModeRunRecord {
+        project_path: project_path.to_string(),
+        project_name: std::path::Path::new(project_path).file_name().map(|name| name.to_string_lossy().to_string()),
+        base_branch,
+        issue_id: issue_id.to_string(),
+        issue_title: request.issue_title.clone(),
+        epic_id: Some(epic_id.to_string()),
+        epic_title: None,
+        provider: provider.to_string(),
+        branch: branch.clone(),
+        worktree_path: worktree_dir.clone(),
+        phase: "workspace_ready".to_string(),
+        last_event: Some("Workspace ready".to_string()),
+        error: None,
+        attempts: 1,
+        surface: None,
+        updated_at: Some(now_rfc3339_string()),
+    });
 
     // 3. Check if cmux workspace already exists for this scope.
     let workspace_name = scope.workspace_name.clone();
@@ -3998,7 +4238,13 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
             let cmux_output = run_cmux(&cmux_create_args)?;
             if !cmux_output.status.success() {
                 let stderr = String::from_utf8_lossy(&cmux_output.stderr);
-                return Err(format!("cmux new-workspace failed: {}", stderr.trim()));
+                let error = format!("cmux new-workspace failed: {}", stderr.trim());
+                let _ = update_auto_mode_run(project_path, issue_id, |run| {
+                    run.phase = "failed".to_string();
+                    run.last_event = Some("Workspace creation failed".to_string());
+                    run.error = Some(error.clone());
+                });
+                return Err(error);
             }
             let stdout = String::from_utf8_lossy(&cmux_output.stdout).trim().to_string();
             log::info!("[auto-mode] cmux workspace created: {}", stdout);
@@ -4026,8 +4272,24 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     let send_output = run_cmux(&cmux_send_args);
     match &send_output {
         Ok(o) if o.status.success() => log::info!("[auto-mode] cmux send succeeded"),
-        Ok(o) => return Err(format!("cmux send failed: {}", String::from_utf8_lossy(&o.stderr).trim())),
-        Err(e) => return Err(format!("cmux send error: {}", e)),
+        Ok(o) => {
+            let error = format!("cmux send failed: {}", String::from_utf8_lossy(&o.stderr).trim());
+            let _ = update_auto_mode_run(project_path, issue_id, |run| {
+                run.phase = "failed".to_string();
+                run.last_event = Some("Executor dispatch failed".to_string());
+                run.error = Some(error.clone());
+            });
+            return Err(error);
+        }
+        Err(e) => {
+            let error = format!("cmux send error: {}", e);
+            let _ = update_auto_mode_run(project_path, issue_id, |run| {
+                run.phase = "failed".to_string();
+                run.last_event = Some("Executor dispatch failed".to_string());
+                run.error = Some(error.clone());
+            });
+            return Err(error);
+        }
     }
 
     if !scope.is_epic {
@@ -4035,6 +4297,12 @@ async fn auto_mode_dispatch(request: AutoModeDispatchRequest) -> Result<AutoMode
     }
 
     let surface = workspace_ref;
+    let _ = update_auto_mode_run(project_path, issue_id, |run| {
+        run.phase = "executing".to_string();
+        run.surface = Some(surface.clone());
+        run.last_event = Some("Executor dispatched".to_string());
+        run.error = None;
+    });
 
     Ok(AutoModeDispatchResponse {
         surface,
@@ -4381,6 +4649,205 @@ async fn auto_mode_log_clear(project_path: String) -> Result<(), String> {
     Ok(())
 }
 
+fn extract_auto_mode_executor_commit(comments: &[String]) -> Option<String> {
+    comments.iter().rev().find_map(|comment| {
+        if !comment.contains("EXECUTOR_COMPLETE") {
+            return None;
+        }
+        comment.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("commit:")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+    })
+}
+
+#[tauri::command]
+async fn auto_mode_runs_list(project_path: String) -> Result<Vec<AutoModeRunRecord>, String> {
+    let project_root = auto_mode_resolve_project_root(&project_path);
+    read_auto_mode_runs(&project_root)
+}
+
+#[tauri::command]
+async fn auto_mode_tick(project_path: String) -> Result<AutoModeTickResponse, String> {
+    let project_root = auto_mode_resolve_project_root(&project_path);
+    let mut runs = read_auto_mode_runs(&project_root)?;
+    for run in runs.iter_mut() {
+        if matches!(run.phase.as_str(), "done" | "cancelled" | "failed") {
+            continue;
+        }
+        let comments = auto_mode_issue_comments(&project_root, &run.issue_id);
+        let (phase, event, error) = auto_mode_run_phase_after_issue_event(&run.phase, &comments);
+        if phase != run.phase || event.is_some() || error.is_some() {
+            run.phase = phase;
+            run.last_event = event.or_else(|| run.last_event.clone());
+            run.error = error;
+            run.updated_at = Some(now_rfc3339_string());
+        }
+    }
+    write_auto_mode_runs(&project_root, &runs)?;
+    Ok(AutoModeTickResponse { runs })
+}
+
+#[tauri::command]
+async fn auto_mode_run_dispatch_review(request: AutoModeRunActionRequest) -> Result<AutoModeRunActionResponse, String> {
+    let project_root = auto_mode_resolve_project_root(&request.project_path);
+    let run = find_auto_mode_run(&project_root, &request.issue_id)?;
+    if run.phase != "executor_complete" {
+        return Err(format!("Review dispatch requires executor_complete phase, got {}", run.phase));
+    }
+    let comments = auto_mode_issue_comments(&project_root, &run.issue_id);
+    let commit = extract_auto_mode_executor_commit(&comments)
+        .ok_or_else(|| "Executor commit not found in durable issue comments".to_string())?;
+    let response = auto_mode_dispatch_review(AutoModeDispatchReviewRequest {
+        project_path: project_root.clone(),
+        issue_id: run.issue_id.clone(),
+        issue_title: run.issue_title.clone(),
+        task_branch: run.branch.clone(),
+        executor_commit: commit,
+    }).await?;
+    let updated = update_auto_mode_run(&project_root, &request.issue_id, |run| {
+        run.phase = "reviewing".to_string();
+        run.surface = Some(response.surface.clone());
+        run.last_event = Some("Review dispatched".to_string());
+        run.error = None;
+    })?;
+    Ok(AutoModeRunActionResponse { run: updated })
+}
+
+#[tauri::command]
+async fn auto_mode_run_create_pr(request: AutoModeRunActionRequest) -> Result<AutoModeRunActionResponse, String> {
+    let project_root = auto_mode_resolve_project_root(&request.project_path);
+    let existing = find_auto_mode_run(&project_root, &request.issue_id)?;
+    if existing.phase != "review_approved" {
+        return Err(format!("Create PR/UPR requires review_approved phase, got {}", existing.phase));
+    }
+    let run = update_auto_mode_run(&project_root, &request.issue_id, |run| {
+        run.phase = "creating_pr".to_string();
+        run.last_event = Some("Creating PR/UPR".to_string());
+        run.error = None;
+    })?;
+    let base_branch = run.base_branch.clone().unwrap_or_else(|| "main".to_string());
+    let title = format!("{}: {}", run.issue_id, run.issue_title);
+    let body = format!(
+        "Auto-mode PR for {}\n\nProvider: {}\nWorktree: {}\n",
+        run.issue_id, run.provider, run.worktree_path,
+    );
+    let output = new_command("gh")
+        .args(["pr", "create", "--base", &base_branch, "--head", &run.branch, "--title", &title, "--body", &body])
+        .current_dir(&run.worktree_path)
+        .env("PATH", get_extended_path())
+        .output()
+        .map_err(|e| format!("Failed to run gh pr create: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let _ = update_auto_mode_run(&project_root, &request.issue_id, |run| {
+            run.phase = "failed".to_string();
+            run.last_event = Some("PR/UPR creation failed".to_string());
+            run.error = Some(stderr.clone());
+        });
+        return Err(format!("gh pr create failed: {}", stderr));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let updated = update_auto_mode_run(&project_root, &request.issue_id, |run| {
+        run.phase = "done".to_string();
+        run.last_event = Some(if stdout.is_empty() { "PR/UPR created".to_string() } else { stdout.clone() });
+        run.error = None;
+    })?;
+    Ok(AutoModeRunActionResponse { run: updated })
+}
+
+#[tauri::command]
+async fn auto_mode_run_retry(request: AutoModeRunActionRequest) -> Result<AutoModeRunActionResponse, String> {
+    let project_root = auto_mode_resolve_project_root(&request.project_path);
+    let updated = update_auto_mode_run(&project_root, &request.issue_id, |run| {
+        run.attempts = run.attempts.saturating_add(1);
+        run.phase = if run.surface.is_some() { "executing" } else { "workspace_ready" }.to_string();
+        run.last_event = Some("Retry requested".to_string());
+        run.error = None;
+    })?;
+    Ok(AutoModeRunActionResponse { run: updated })
+}
+
+#[tauri::command]
+async fn auto_mode_run_cancel(request: AutoModeRunActionRequest) -> Result<AutoModeRunActionResponse, String> {
+    let project_root = auto_mode_resolve_project_root(&request.project_path);
+    let run = find_auto_mode_run(&project_root, &request.issue_id)?;
+    let _ = auto_mode_cancel_task(AutoModeCancelTaskRequest {
+        project_path: project_root.clone(),
+        issue_id: request.issue_id.clone(),
+        surface: run.surface.clone(),
+    }).await;
+    let updated = update_auto_mode_run(&project_root, &request.issue_id, |run| {
+        run.phase = "cancelled".to_string();
+        run.last_event = Some("Cancelled by Action Center".to_string());
+        run.error = None;
+    })?;
+    Ok(AutoModeRunActionResponse { run: updated })
+}
+
+#[tauri::command]
+async fn auto_mode_run_cleanup(request: AutoModeRunActionRequest) -> Result<AutoModeRunActionResponse, String> {
+    let project_root = auto_mode_resolve_project_root(&request.project_path);
+    let run = find_auto_mode_run(&project_root, &request.issue_id)?;
+    if !matches!(run.phase.as_str(), "done" | "cancelled") {
+        return Err(format!("Cleanup requires done or cancelled phase, got {}", run.phase));
+    }
+    if run.provider == "gitWorktree" && std::path::Path::new(&run.worktree_path).exists() {
+        let status = new_command("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&run.worktree_path)
+            .env("PATH", get_extended_path())
+            .output()
+            .map_err(|e| format!("Failed to inspect worktree: {}", e))?;
+        if status.status.success() && String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+            let _ = new_command("git")
+                .args(["worktree", "remove", &run.worktree_path])
+                .current_dir(&project_root)
+                .env("PATH", get_extended_path())
+                .output();
+        } else {
+            return Err("Worktree has uncommitted changes; cleanup skipped".to_string());
+        }
+    }
+    let updated = update_auto_mode_run(&project_root, &request.issue_id, |run| {
+        run.last_event = Some("Cleanup complete".to_string());
+        run.error = None;
+    })?;
+    Ok(AutoModeRunActionResponse { run: updated })
+}
+
+#[tauri::command]
+async fn auto_mode_open_worktree(request: AutoModeRunActionRequest) -> Result<(), String> {
+    let project_root = auto_mode_resolve_project_root(&request.project_path);
+    let run = find_auto_mode_run(&project_root, &request.issue_id)?;
+    if !std::path::Path::new(&run.worktree_path).exists() {
+        return Err(format!("Worktree not found: {}", run.worktree_path));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&run.worktree_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open worktree: {}", e))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        new_command("cmd")
+            .args(["/C", "start", "", &run.worktree_path])
+            .spawn()
+            .map_err(|e| format!("Failed to open worktree: {}", e))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&run.worktree_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open worktree: {}", e))?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -7971,6 +8438,14 @@ pub fn run() {
             auto_mode_log_append,
             auto_mode_log_read,
             auto_mode_log_clear,
+            auto_mode_runs_list,
+            auto_mode_tick,
+            auto_mode_run_dispatch_review,
+            auto_mode_run_create_pr,
+            auto_mode_run_retry,
+            auto_mode_run_cancel,
+            auto_mode_run_cleanup,
+            auto_mode_open_worktree,
             auto_mode_cancel_task,
             terminal_native_renderer_capabilities,
             terminal_open_native_renderer,
@@ -8752,6 +9227,27 @@ prunable gitdir file points to non-existent location
 
         assert!(!has_in_progress_non_epic_issue(&[epic]));
         assert!(has_in_progress_non_epic_issue(&[task]));
+    }
+
+    #[test]
+    fn auto_mode_run_phase_advances_from_durable_issue_comments() {
+        let executor_done = "EXECUTOR_COMPLETE\ncommit: abc123\nsummary: done";
+        assert_eq!(
+            auto_mode_run_phase_after_issue_event("executing", &[executor_done.to_string()]),
+            ("executor_complete".to_string(), Some("Executor complete".to_string()), None),
+        );
+
+        let approved = "REVIEW_VERDICT: APPROVED\nSummary: ok";
+        assert_eq!(
+            auto_mode_run_phase_after_issue_event("reviewing", &[approved.to_string()]),
+            ("review_approved".to_string(), Some("Review approved".to_string()), None),
+        );
+
+        let changes = "REVIEW_VERDICT: CHANGES_REQUESTED\nFindings: update tests";
+        assert_eq!(
+            auto_mode_run_phase_after_issue_event("reviewing", &[changes.to_string()]),
+            ("review_changes_requested".to_string(), Some("Review requested changes".to_string()), Some(changes.to_string())),
+        );
     }
 
     #[test]

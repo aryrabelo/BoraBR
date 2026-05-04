@@ -95,6 +95,37 @@ export interface ActionCenterLinearIssueResponse {
   issues: ActionCenterLinearIssue[]
 }
 
+export type AutoModeRunPhase =
+  | 'workspace_ready'
+  | 'executing'
+  | 'executor_complete'
+  | 'reviewing'
+  | 'review_approved'
+  | 'review_changes_requested'
+  | 'creating_pr'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+
+export interface AutoModeRunRecord {
+  projectPath: string
+  projectName?: string | null
+  baseBranch?: string | null
+  issueId: string
+  issueTitle: string
+  epicId?: string | null
+  epicTitle?: string | null
+  provider: 'gitWorktree' | 'wt'
+  branch: string
+  worktreePath: string
+  phase: AutoModeRunPhase
+  lastEvent?: string | null
+  error?: string | null
+  attempts: number
+  surface?: string | null
+  updatedAt?: string | null
+}
+
 export interface ProjectWorktree {
   rootPath: string
   worktreePath: string
@@ -183,6 +214,38 @@ export async function cmuxSendPrompt(surface: string, prompt: string): Promise<C
     return invoke<CmuxSendPromptResponse>('cmux_send_prompt', { request: { surface, prompt } })
   }
   throw new Error('cmux prompt is only available in the desktop app')
+}
+
+export async function listAutoModeRuns(projectPath: string): Promise<AutoModeRunRecord[]> {
+  if (isTauri()) {
+    return invoke<AutoModeRunRecord[]>('auto_mode_runs_list', { projectPath })
+  }
+  return []
+}
+
+export async function autoModeTick(projectPath: string): Promise<{ runs: AutoModeRunRecord[] }> {
+  if (isTauri()) {
+    return invoke<{ runs: AutoModeRunRecord[] }>('auto_mode_tick', { projectPath })
+  }
+  return { runs: [] }
+}
+
+export async function autoModeRunAction(
+  action: 'dispatch_review' | 'create_pr' | 'retry' | 'cancel' | 'cleanup' | 'open_worktree',
+  projectPath: string,
+  issueId: string,
+): Promise<{ run: AutoModeRunRecord } | void> {
+  if (!isTauri()) return
+  const request = { projectPath, issueId }
+  const command = {
+    dispatch_review: 'auto_mode_run_dispatch_review',
+    create_pr: 'auto_mode_run_create_pr',
+    retry: 'auto_mode_run_retry',
+    cancel: 'auto_mode_run_cancel',
+    cleanup: 'auto_mode_run_cleanup',
+    open_worktree: 'auto_mode_open_worktree',
+  }[action]
+  return invoke(command, { request })
 }
 
 export async function discoverProjectWorktrees(projectPath: string): Promise<ProjectWorktree[]> {
